@@ -1821,7 +1821,7 @@ void ConnectionsManager::initDatacenters() {
             datacenter = datacenters[1];
         }
         std::vector<TcpAddress> customAddresses;
-        customAddresses.push_back(TcpAddress("XXX.XXX.XXX.XXX", 10443, 0, ""));
+        customAddresses.push_back(TcpAddress("10.0.7.7", 10443, 0, ""));
         datacenter->replaceAddresses(customAddresses, 0);
 
 #if 0
@@ -1862,7 +1862,7 @@ void ConnectionsManager::initDatacenters() {
             datacenter = datacenters[1];
         }
         std::vector<TcpAddress> customAddresses;
-        customAddresses.push_back(TcpAddress("XXX.XXX.XXX.XXX", 10443, 0, ""));
+        customAddresses.push_back(TcpAddress("10.0.7.7", 10443, 0, ""));
         datacenter->replaceAddresses(customAddresses, 0);
 
 #if 0
