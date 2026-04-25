@@ -1,66 +1,65 @@
-# Builds Android APK using Gradle and uploads the APK as an artifact.
-# Adjust android platform/build-tools versions to match your project.
+name: Build APK
+
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
   pull_request:
+    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   build:
-    name: Build Android APK
     runs-on: ubuntu-latest
     env:
-      ANDROID_SDK_ROOT: /usr/local/android-sdk
+      GRADLE_USER_HOME: ${{ github.workspace }}/.gradle
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up JDK 11
+      - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '11'
+          java-version: '17'
+          cache: gradle
 
-      - name: Cache Gradle
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/gradle/wrapper/gradle-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
-
-      - name: Download Android command-line tools
+      - name: Decode keystore
+        if: secrets.keystore_base64 != ''
         run: |
-          mkdir -p $ANDROID_SDK_ROOT/cmdline-tools
-          curl -fsSL -o cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-8512546_latest.zip
-          unzip -q cmdline-tools.zip -d $ANDROID_SDK_ROOT/cmdline-tools
-          # Ensure a stable path sdkmanager expects
-          mkdir -p $ANDROID_SDK_ROOT/cmdline-tools/latest
-          mv $ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools/* $ANDROID_SDK_ROOT/cmdline-tools/latest/ || true
-          rm -f cmdline-tools.zip
+          echo "${{ secrets.keystore_base64 }}" | base64 --decode > ./keystore.jks
+        shell: bash
 
-      - name: Install Android SDK packages
+      - name: Create gradle properties
         run: |
-          export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH"
-          yes | sdkmanager --sdk_root=$ANDROID_SDK_ROOT --install "platform-tools" "platforms;android-33" "build-tools;33.0.2"
-          # Accept licenses (repeat to be safe)
-          yes | sdkmanager --sdk_root=$ANDROID_SDK_ROOT --licenses || true
+          cat > gradle.properties <<EOF
+          MYAPP_UPLOAD_STORE_FILE=keystore.jks
+          MYAPP_UPLOAD_STORE_PASSWORD=${{ secrets.keystore_password }}
+          MYAPP_UPLOAD_KEY_ALIAS=${{ secrets.key_alias }}
+          MYAPP_UPLOAD_KEY_PASSWORD=${{ secrets.key_password }}
+          org.gradle.jvmargs=-Xmx2g
+          EOF
 
-      - name: Make Gradle wrapper executable
+      - name: Grant execute to gradlew
         run: chmod +x ./gradlew
 
-      - name: Build APK (Release)
-        run: ./gradlew assembleRelease --no-daemon
-        # If your project doesn't have a release signing config, switch to assembleDebug:
-        # run: ./gradlew assembleDebug --no-daemon
+      - name: Show Gradle version
+        run: ./gradlew --version
 
-      - name: Upload APK artifact(s)
+      - name: List available tasks (diagnostic)
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        run: ./gradlew tasks --all
+
+      - name: Build release APK (assembleRelease)
+        run: |
+          # Avoid running lint tasks automatically; run only assembleRelease
+          ./gradlew :app:assembleRelease --no-daemon --no-configuration-cache -x lint -x lintFix -x ktlint
+        env:
+          JAVA_OPTS: -Xmx2g
+
+      - name: Upload release APK
         uses: actions/upload-artifact@v4
         with:
-          name: app-apks
+          name: app-release-apk
           path: |
-            app/build/outputs/apk/**/*release*.apk
-            app/build/outputs/apk/**/*debug*.apk
+            **/build/outputs/**/*.apk
+            */build/outputs/**/*.apk
