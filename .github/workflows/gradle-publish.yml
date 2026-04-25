@@ -24,20 +24,20 @@ jobs:
           cache: gradle
 
       - name: Decode keystore
-        if: secrets.keystore_base64 != ''
+        if: ${{ secrets.keystore_base64 != '' }}
         run: |
           echo "${{ secrets.keystore_base64 }}" | base64 --decode > ./keystore.jks
         shell: bash
 
       - name: Create gradle properties
+        if: ${{ secrets.keystore_base64 != '' }}
         run: |
-          cat > gradle.properties <<EOF
-          MYAPP_UPLOAD_STORE_FILE=keystore.jks
-          MYAPP_UPLOAD_STORE_PASSWORD=${{ secrets.keystore_password }}
-          MYAPP_UPLOAD_KEY_ALIAS=${{ secrets.key_alias }}
-          MYAPP_UPLOAD_KEY_PASSWORD=${{ secrets.key_password }}
-          org.gradle.jvmargs=-Xmx2g
-          EOF
+          printf '%s\n' \
+            "MYAPP_UPLOAD_STORE_FILE=keystore.jks" \
+            "MYAPP_UPLOAD_STORE_PASSWORD=${{ secrets.keystore_password }}" \
+            "MYAPP_UPLOAD_KEY_ALIAS=${{ secrets.key_alias }}" \
+            "MYAPP_UPLOAD_KEY_PASSWORD=${{ secrets.key_password }}" \
+            "org.gradle.jvmargs=-Xmx2g" > gradle.properties
 
       - name: Grant execute to gradlew
         run: chmod +x ./gradlew
