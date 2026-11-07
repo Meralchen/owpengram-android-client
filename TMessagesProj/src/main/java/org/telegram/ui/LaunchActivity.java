@@ -128,6 +128,8 @@ import org.telegram.messenger.MessagesStorage;
 import org.telegram.messenger.NotificationCenter;
 import org.telegram.owpengram.OwpengramServer;
 import org.telegram.owpengram.OwpengramServers;
+import org.telegram.ui.Components.Shorts.ShortsActivity;
+import org.telegram.ui.Components.Shorts.ShortsRepository;
 import org.telegram.messenger.NotificationsController;
 import org.telegram.messenger.OpenAttachedMenuBotReceiver;
 import org.telegram.messenger.PushListenerController;
@@ -1324,6 +1326,61 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
         return false;
     }
 
+    /**
+     * Opens https://{server-public-host}/{username}/v/{messageId} (and the equivalent owpg:// link,
+     * already normalized to the same path). Identity comes only from the path; the clip is shown
+     * only after the channel and the exact message were loaded through the account's MTProto session.
+     */
+    private boolean openShortVideoLink(Uri uri, int account, Browser.Progress progress) {
+        final List<String> path = uri.getPathSegments();
+        if (path == null || path.size() != 3 || !"v".equals(path.get(1))) {
+            return false;
+        }
+        final String username = path.get(0);
+        final int messageId;
+        try {
+            if (!ShortsRepository.isValidUsername(username)) {
+                return false;
+            }
+            messageId = Integer.parseInt(path.get(2));
+            if (messageId <= 0) {
+                return false;
+            }
+        } catch (NumberFormatException invalidId) {
+            return false;
+        }
+
+        final AlertDialog progressDialog;
+        if (progress != null) {
+            progress.init();
+            progressDialog = null;
+        } else {
+            progressDialog = new AlertDialog(this, AlertDialog.ALERT_TYPE_SPINNER);
+            progressDialog.showDelayed(300);
+        }
+        ShortsRepository.resolveLink(account, username, messageId, (item, failure) -> {
+            if (progress != null) {
+                progress.end();
+            }
+            if (progressDialog != null) {
+                try {
+                    progressDialog.dismiss();
+                } catch (Exception ignore) {
+                }
+            }
+            final BaseFragment lastFragment = getLastFragment();
+            if (item == null) {
+                if (lastFragment != null) {
+                    final int text = failure == ShortsRepository.LinkCallback.NO_ACCESS ? R.string.ChannelCantOpenPrivate : R.string.MessageNotFound;
+                    BulletinFactory.of(lastFragment).createErrorBulletin(LocaleController.getString(text)).show();
+                }
+                return;
+            }
+            presentFragment(new ShortsActivity(item));
+        });
+        return true;
+    }
+
     /** Shown when an owpg:// link targets a server the user has no account on. */
     private void showOwpengramOtherServerDialog(String host) {
         try {
@@ -2196,6 +2253,12 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
                                             }
                                             // Rewrite host -> t.me so the shared t.me path parser handles /+hash, /username, etc.
                                             data = Uri.parse("https://t.me" + (TextUtils.isEmpty(data.getPath()) ? "/" : data.getPath()) + (TextUtils.isEmpty(data.getQuery()) ? "" : "?" + data.getQuery()));
+                                            // /{username}/v/{messageId} is a Shorts clip; it must win over the
+                                            // generic /{username}/{messageId} and story branches below.
+                                            if (openShortVideoLink(data, intentAccount[0], progress)) {
+                                                intent.setAction(null);
+                                                return false;
+                                            }
                                         } else {
                                             // t.me links require a Telegram-official account.
                                             if (!routeTelegramLinkToTelegramAccount(intent, intentAccount, progress)) {

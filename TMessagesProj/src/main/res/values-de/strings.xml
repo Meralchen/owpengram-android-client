@@ -1375,4 +1375,22 @@
     <string name="RemindTodayAt">\'Heute um\' HH:mm \'erinnern\'</string>
     <string name="RemindDayAt">\'Am\' d MMM \'um\' HH:mm \'erinnern\'</string>
     <string name="RemindDayYearAt">\'Am\' d\'.\' MMM yyyy \'um\' HH:mm \'erinnern\'</string>
+    <string name="ShortsTitle">Clips</string>
+    <string name="ShortsEmpty">Noch keine Kanalvideos.</string>
+    <string name="ShortsShare">Teilen</string>
+    <string name="ShortsComments">Kommentare</string>
+    <string name="ShortsCommentsDisabled">Kommentare sind für dieses Video deaktiviert.</string>
+    <string name="ShortsLike">Gefällt mir, %1$d Likes</string>
+    <string name="ShortsUnlike">Gefällt dir, %1$d Likes</string>
+    <string name="ShortsCommentsCount">Kommentare, %1$d</string>
+    <string name="ShortsViewsCount">%1$d Aufrufe</string>
+    <string name="ShortsLikeFailed">Like konnte nicht gespeichert werden.</string>
+    <string name="ShortsActionLike">Gefällt mir</string>
+    <string name="ShortsActionUnlike">Like entfernen</string>
+    <string name="ShortsActionComments">Kommentare öffnen</string>
+    <string name="ShortsActionChannel">Kanal öffnen</string>
+    <string name="ShortsActionNext">Nächster Clip</string>
+    <string name="ShortsActionPrevious">Vorheriger Clip</string>
+    <string name="ShortsAccDescr">Video von %1$s. %2$s. Dauer %3$s</string>
+    <string name="ShortsNotAVideo">Dieser Link verweist auf kein Kanalvideo.</string>
 </resources>

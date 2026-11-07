@@ -4,6 +4,16 @@
     android:installLocation="auto">
 
     <application android:name="org.telegram.messenger.ApplicationLoaderImpl" tools:replace="name">
+        <activity android:name="org.telegram.ui.LaunchActivity" tools:node="merge">
+            <!-- Shorts: https://<public-host>/<channel-username>/v/<channel-message-id>.
+                 Host comes from the OWPENGRAM_PUBLIC_HOST Gradle property (see build.gradle). -->
+            <intent-filter android:autoVerify="${owpengramAppLinksVerified}">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="${owpengramPublicHost}" android:pathPattern="/.*/v/.*" />
+            </intent-filter>
+        </activity>
         <service
             android:name="org.telegram.messenger.GoogleVoiceClientService"
             android:exported="true"
