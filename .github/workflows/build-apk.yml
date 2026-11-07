@@ -8,10 +8,10 @@ on:
   workflow_dispatch:
     inputs:
       build_type:
-        description: 'debug (fast, debuggable) or release (minified "standalone" build type)'
+        description: 'debug (fast, debuggable), stable (minified, per-ABI APKs) or both'
         type: choice
-        options: [debug, release]
-        default: debug
+        options: [both, debug, stable]
+        default: both
       owpengram_build:
         description: 'Release number (the N in tag ON); 0 = local/dev build without self-update'
         default: '0'
@@ -31,13 +31,21 @@ env:
 
 jobs:
   apk:
-    name: Standalone APK (${{ github.event.inputs.build_type || (startsWith(github.ref, 'refs/tags/O') && 'release') || 'debug' }})
+    name: Standalone APK (${{ matrix.variant }})
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: ${{ fromJSON((github.event.inputs.build_type == 'debug' && '["debug"]') || (github.event.inputs.build_type == 'stable' && '["stable"]') || '["debug","stable"]') }}
     env:
       # wallet-engine keeps iOS snapshot PNGs in LFS; the Android build needs none of them.
       GIT_LFS_SKIP_SMUDGE: '1'
-      BUILD_TYPE: ${{ github.event.inputs.build_type || (startsWith(github.ref, 'refs/tags/O') && 'release') || 'debug' }}
+      # ccache: the NDK is reinstalled every run, so compare compilers by content, not mtime.
+      CCACHE_COMPILERCHECK: content
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: 'true'
+      CCACHE_SLOPPINESS: time_macros
     steps:
       - name: Free disk space
         run: |
@@ -66,9 +74,19 @@ jobs:
             ndk;${{ env.NDK_VERSION }}
             cmake;${{ env.CMAKE_VERSION }}
 
+      # Gradle caches are written on every branch and PR (the action's default
+      # is read-only outside main), so follow-up builds of a PR start warm too.
       - uses: gradle/actions/setup-gradle@v4
         with:
-          cache-read-only: ${{ github.event_name == 'pull_request' }}
+          cache-read-only: false
+
+      # Native code (tdlib, ffmpeg, boringssl, tgcalls, ...) dominates build
+      # time and Gradle's build cache does not cover CMake, so cache the
+      # compiled objects with ccache, separately per variant.
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ndk-${{ env.NDK_VERSION }}-${{ matrix.variant }}
+          max-size: 3G
 
       - name: Resolve release number
         id: version
@@ -118,26 +136,39 @@ jobs:
 
       - name: Build
         run: |
-          if [ "$BUILD_TYPE" = release ]; then variant=Standalone; dir=standalone; else variant=Debug; dir=debug; fi
-          echo "APK_PATH=TMessagesProj_AppStandalone/build/outputs/apk/afat/$dir/app.apk" >> "$GITHUB_ENV"
-          ./gradlew --no-daemon --stacktrace \
+          if [ "${{ matrix.variant }}" = stable ]; then task=Standalone; dir=standalone; else task=Debug; dir=debug; fi
+          echo "APK_DIR=TMessagesProj_AppStandalone/build/outputs/apk/afat/$dir" >> "$GITHUB_ENV"
+          ./gradlew --no-daemon --stacktrace --build-cache \
             -Dorg.gradle.jvmargs="-Xmx6g -XX:MaxMetaspaceSize=1g" \
             -POWPENGRAM_BUILD=${{ steps.version.outputs.number }} \
             -POWPENGRAM_PUBLIC_HOST="${{ vars.OWPENGRAM_PUBLIC_HOST }}" \
             -POWPENGRAM_APP_LINKS_VERIFIED="${{ vars.OWPENGRAM_APP_LINKS_VERIFIED }}" \
-            :TMessagesProj_AppStandalone:assembleAfat$variant
+            -PNATIVE_COMPILER_LAUNCHER=ccache \
+            :TMessagesProj_AppStandalone:assembleAfat$task
+          ccache --show-stats
 
-      - name: Rename APK
+      # debug: the universal APK. stable: the universal APK plus one APK per ABI
+      # (arm64-v8a fits almost every current phone).
+      - name: Collect APKs
         id: apk
         run: |
-          name="owpengram-${BUILD_TYPE}-O${{ steps.version.outputs.number }}-${GITHUB_SHA::7}.apk"
+          base="owpengram-${{ matrix.variant }}-O${{ steps.version.outputs.number }}-${GITHUB_SHA::7}"
           mkdir -p dist
-          cp "$APK_PATH" "dist/$name"
-          echo "name=$name" >> "$GITHUB_OUTPUT"
+          cp "$APK_DIR/app.apk" "dist/$base-universal.apk"
+          if [ "${{ matrix.variant }}" = stable ]; then
+            for apk in "$APK_DIR"/app-*.apk; do
+              abi="$(basename "$apk" .apk)"; abi="${abi#app-}"
+              cp "$apk" "dist/$base-$abi.apk"
+            done
+          fi
+          ls -l dist
+          echo "name=$base" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.apk.outputs.name }}
-          path: dist/${{ steps.apk.outputs.name }}
+          path: dist/*.apk
           if-no-files-found: error
           retention-days: 14
+          # APKs are zip files already.
+          compression-level: 0

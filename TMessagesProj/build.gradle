@@ -146,6 +146,11 @@ android {
             cmake {
                 version '3.22.1'
                 arguments '-DANDROID_STL=c++_static', '-DANDROID_PLATFORM=android-23' //, '-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON'
+                // -PNATIVE_COMPILER_LAUNCHER=ccache (used by CI) caches native objects between builds.
+                def nativeLauncher = (project.findProperty('NATIVE_COMPILER_LAUNCHER') ?: '').toString().trim()
+                if (nativeLauncher) {
+                    arguments "-DCMAKE_C_COMPILER_LAUNCHER=${nativeLauncher}", "-DCMAKE_CXX_COMPILER_LAUNCHER=${nativeLauncher}"
+                }
                 targets 'tmessages.49'
             }
         }
