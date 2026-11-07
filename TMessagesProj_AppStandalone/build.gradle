@@ -77,19 +77,38 @@ android {
         jniLibs {
             useLegacyPackaging = true
         }
+        resources {
+            excludes += [
+                    'META-INF/*.version',
+                    'META-INF/LICENSE*',
+                    'META-INF/NOTICE*',
+                    'META-INF/DEPENDENCIES',
+                    'META-INF/proguard/**',
+                    'META-INF/com.android.tools/**',
+                    'DebugProbesKt.bin'
+            ]
+        }
+    }
+
+    // Stable (standalone) builds also emit one APK per ABI (app-<abi>.apk) next to
+    // the universal app.apk. A phone only needs its own ABI, so these are far smaller.
+    splits {
+        abi {
+            enable gradle.startParameter.taskNames.any { it.toLowerCase().contains('standalone') }
+            reset()
+            include "armeabi-v7a", "arm64-v8a", "x86", "x86_64"
+            universalApk true
+        }
     }
 
     buildTypes {
-        // No applicationIdSuffix here (unlike upstream Telegram-Android's
-        // own AppStandalone, which keeps ".web" so its Play and
-        // direct-download builds can coexist as separate installs): this
-        // fork only ever
-        // wants ONE installed app per device, sharing the same
-        // applicationId as :TMessagesProj_App (same keystore too -- see
-        // signingConfigs above), so switching a device from the Play build
-        // to this unrestricted one is a plain in-place update, not a fresh
-        // side-by-side install that starts local chat data over from zero.
+        // The stable (standalone) build has no applicationIdSuffix: one installed
+        // stable app per device, updated in place. The debug build gets ".debug"
+        // so it installs next to the stable one instead of replacing it.
         debug {
+            applicationIdSuffix ".debug"
+            versionNameSuffix "-debug"
+            resValue "string", "AppName", "OwpenGram Debug"
             debuggable true
             jniDebuggable true
             signingConfig signingConfigs.debug
@@ -105,6 +124,7 @@ android {
             signingConfig signingConfigs.release
             minifyEnabled true
             shrinkResources true
+            crunchPngs true
             multiDexEnabled true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), '../TMessagesProj/proguard-rules.pro'
             ndk.debugSymbolLevel = 'FULL'
@@ -136,10 +156,20 @@ android {
 
     defaultConfig.versionCode = Integer.parseInt(APP_VERSION_CODE)
 
+    // Per-ABI digits stay below the universal APK's (9), so a universal build
+    // can always replace a split one; arm64 outranks armv7, x86_64 outranks x86.
+    def splitAbiVersionCodes = ['armeabi-v7a': 1, 'x86': 2, 'arm64-v8a': 3, 'x86_64': 4]
+
     applicationVariants.all { variant ->
         variant.outputs.all { output ->
-            outputFileName = "app.apk"
-            output.versionCodeOverride = defaultConfig.versionCode * 10 + variant.productFlavors.get(0).abiVersionCode
+            def abi = output.getFilter("ABI")
+            if (abi == null) {
+                outputFileName = "app.apk"
+                output.versionCodeOverride = defaultConfig.versionCode * 10 + variant.productFlavors.get(0).abiVersionCode
+            } else {
+                outputFileName = "app-${abi}.apk"
+                output.versionCodeOverride = defaultConfig.versionCode * 10 + splitAbiVersionCodes[abi]
+            }
         }
     }
 
