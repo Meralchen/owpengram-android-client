@@ -11649,4 +11649,22 @@
     <string name="NoPaidMessagesTokenUsed">un1 used your QR code and can message you for free</string>
     <string name="NoPaidMessagesTokenUsedOut">You used the QR code of un1 and can message them for free</string>
     <string name="NoPaidMessagesTokenImported">You can now message **%1$s** for free.</string>
+    <string name="ShortsTitle">Clips</string>
+    <string name="ShortsEmpty">No channel videos yet.</string>
+    <string name="ShortsShare">Share</string>
+    <string name="ShortsComments">Comments</string>
+    <string name="ShortsCommentsDisabled">Comments are turned off for this video.</string>
+    <string name="ShortsLike">Like, %1$d likes</string>
+    <string name="ShortsUnlike">Liked, %1$d likes</string>
+    <string name="ShortsCommentsCount">Comments, %1$d</string>
+    <string name="ShortsViewsCount">%1$d views</string>
+    <string name="ShortsLikeFailed">Couldn\'t update your like.</string>
+    <string name="ShortsActionLike">Like</string>
+    <string name="ShortsActionUnlike">Remove like</string>
+    <string name="ShortsActionComments">Open comments</string>
+    <string name="ShortsActionChannel">Open channel</string>
+    <string name="ShortsActionNext">Next clip</string>
+    <string name="ShortsActionPrevious">Previous clip</string>
+    <string name="ShortsAccDescr">Video from %1$s. %2$s. Duration %3$s</string>
+    <string name="ShortsNotAVideo">This link doesn\'t point to a channel video.</string>
 </resources>

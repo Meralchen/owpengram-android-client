@@ -16183,6 +16183,7 @@ public class MessagesController extends BaseController implements NotificationCe
         } else {
             getConnectionsManager().cleanup(type == 2);
         }
+        org.telegram.ui.Components.Shorts.ShortsCache.clearAccount(currentAccount);
         getUserConfig().clearConfig();
         SharedPrefsHelper.cleanupAccount(currentAccount);
         org.telegram.owpengram.OwpengramServers.clearServerForAccount(currentAccount);

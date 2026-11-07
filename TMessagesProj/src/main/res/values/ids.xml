@@ -65,4 +65,10 @@
 
     <item name="tag_view_on_post_draw_state" type="id" />
     <item name="tag_view_on_post_draw_root_state" type="id" />
+    <item name="shorts_action_like" type="id" />
+    <item name="shorts_action_comments" type="id" />
+    <item name="shorts_action_channel" type="id" />
+    <item name="shorts_action_share" type="id" />
+    <item name="shorts_action_next" type="id" />
+    <item name="shorts_action_previous" type="id" />
 </resources>

@@ -29,6 +29,15 @@ android {
 
     defaultConfig.applicationId = APP_PACKAGE
 
+    // HTTPS Shorts links (https://<host>/<username>/v/<id>) for the server's TELESRV_PUBLIC_BASE_URL host.
+    // Unset -> the reserved .invalid host, so no real domain is claimed; owpg:// links work regardless.
+    // Set OWPENGRAM_APP_LINKS_VERIFIED=true only once https://<host>/.well-known/assetlinks.json is published.
+    def shortsHost = (project.findProperty('OWPENGRAM_PUBLIC_HOST') ?: '').toString().trim()
+    defaultConfig.manifestPlaceholders += [
+            owpengramPublicHost: shortsHost ? shortsHost : 'owpengram.invalid',
+            owpengramAppLinksVerified: (shortsHost && project.findProperty('OWPENGRAM_APP_LINKS_VERIFIED') == 'true') ? 'true' : 'false'
+    ]
+
 
     lintOptions {
         disable 'MissingTranslation'
