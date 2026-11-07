@@ -123,6 +123,8 @@ jobs:
           ./gradlew --no-daemon --stacktrace \
             -Dorg.gradle.jvmargs="-Xmx6g -XX:MaxMetaspaceSize=1g" \
             -POWPENGRAM_BUILD=${{ steps.version.outputs.number }} \
+            -POWPENGRAM_PUBLIC_HOST="${{ vars.OWPENGRAM_PUBLIC_HOST }}" \
+            -POWPENGRAM_APP_LINKS_VERIFIED="${{ vars.OWPENGRAM_APP_LINKS_VERIFIED }}" \
             :TMessagesProj_AppStandalone:assembleAfat$variant
 
       - name: Rename APK
