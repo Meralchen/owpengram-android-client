@@ -186,7 +186,15 @@ public class ShortsActivity extends BaseFragment implements NotificationCenter.N
             final boolean wasEmpty = items.isEmpty();
             addItems(page);
             if (error != null && items.isEmpty() && emptyView != null) {
-                emptyView.setText(LocaleController.getString(R.string.ErrorOccurred));
+                emptyView.setText(LocaleController.getString(R.string.ShortsLoadFailed));
+                emptyView.setOnClickListener(v -> {
+                    emptyView.setText("");
+                    updateState();
+                    loadMore();
+                });
+            } else if (error == null && page.isEmpty() && endReached && items.isEmpty() && emptyView != null) {
+                emptyView.setText(LocaleController.getString(R.string.ShortsEmpty));
+                emptyView.setOnClickListener(null);
             }
             updateState();
             if (wasEmpty && !items.isEmpty() && pager != null) {
@@ -210,6 +218,7 @@ public class ShortsActivity extends BaseFragment implements NotificationCenter.N
                 emptyView.setText(LocaleController.getString(R.string.ShortsEmpty));
             }
             emptyView.setVisibility(View.VISIBLE);
+            emptyView.setClickable(emptyView.getText().toString().equals(LocaleController.getString(R.string.ShortsLoadFailed)));
         } else {
             emptyView.setVisibility(View.GONE);
         }

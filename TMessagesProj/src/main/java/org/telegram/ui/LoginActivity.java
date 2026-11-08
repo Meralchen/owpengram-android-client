@@ -267,7 +267,8 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
             // a second plain PhoneView instance, reusing all of its existing
             // country-picker/SIM-permission logic unchanged instead of
             // duplicating any of it.
-            VIEW_PHONE_FALLBACK = 19;
+            VIEW_PHONE_FALLBACK = 19,
+            VIEW_USERNAME_LOGIN = 20;
 
     public final static int COUNTRY_STATE_NOT_SET_OR_VALID = 0,
             COUNTRY_STATE_EMPTY = 1,
@@ -316,7 +317,8 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
             VIEW_CODE_WORD,
             VIEW_CODE_PHRASE,
             VIEW_PAY,
-            VIEW_PHONE_FALLBACK
+            VIEW_PHONE_FALLBACK,
+            VIEW_USERNAME_LOGIN
     })
     private @interface ViewNumber {}
 
@@ -335,7 +337,7 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
     // createView's VIEW_PHONE_INPUT slot can be given an EmailSignupView
     // instead of the normal PhoneView. See EmailSignupView below.
     private boolean emailSignupEnabled;
-    private final SlideView[] views = new SlideView[20];
+    private final SlideView[] views = new SlideView[21];
     private CustomPhoneKeyboardView keyboardView;
     private ValueAnimator keyboardAnimator;
     private boolean paid;
@@ -707,6 +709,7 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
         views[VIEW_CODE_WORD] = new LoginActivityPhraseView(context, AUTH_TYPE_WORD);
         views[VIEW_CODE_PHRASE] = new LoginActivityPhraseView(context, AUTH_TYPE_PHRASE);
         views[VIEW_PAY] = new LoginPayView(context);
+        views[VIEW_USERNAME_LOGIN] = new UsernameLoginView(context);
 
         for (int a = 0; a < views.length; a++) {
             views[a].setVisibility(a == 0 ? View.VISIBLE : View.GONE);
@@ -1127,10 +1130,12 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
                 clearCurrentState();
             }
             return true;
+        } else if (currentViewNum == VIEW_USERNAME_LOGIN) {
+            if (invoked) setPage(VIEW_PHONE_INPUT, true, null, true);
         } else if (currentViewNum == VIEW_PASSWORD) {
             if (invoked) {
                 views[currentViewNum].onBackPressed(true);
-                setPage(VIEW_PHONE_INPUT, true, null, true);
+                setPage(((LoginActivityPasswordView) views[currentViewNum]).usernameLogin ? VIEW_USERNAME_LOGIN : VIEW_PHONE_INPUT, true, null, true);
             }
         } else if (currentViewNum == VIEW_RECOVER || currentViewNum == VIEW_RESET_WAIT) {
             if (invoked) {
@@ -1522,7 +1527,7 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
     }
 
     public void setPage(@ViewNumber int page, boolean animated, Bundle params, boolean back) {
-        boolean needFloatingButton = page == VIEW_PHONE_INPUT || page == VIEW_PHONE_FALLBACK || page == VIEW_REGISTER || page == VIEW_PASSWORD ||
+        boolean needFloatingButton = page == VIEW_PHONE_INPUT || page == VIEW_PHONE_FALLBACK || page == VIEW_USERNAME_LOGIN || page == VIEW_REGISTER || page == VIEW_PASSWORD ||
                 page == VIEW_NEW_PASSWORD_STAGE_1 || page == VIEW_NEW_PASSWORD_STAGE_2 || page == VIEW_ADD_EMAIL || page == VIEW_CODE_PHRASE || page == VIEW_CODE_WORD;
         if (page == currentViewNum) {
             animated = false;
@@ -2024,6 +2029,17 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
             subtitleView.setLineSpacing(dp(2), 1.0f);
             addView(subtitleView, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL, 32, 8, 32, 0));
 
+            if (activityMode == MODE_LOGIN) {
+                TextView usernameLogin = new TextView(context);
+                usernameLogin.setText("Mit Username anmelden");
+                usernameLogin.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 14);
+                usernameLogin.setGravity(Gravity.CENTER);
+                usernameLogin.setPadding(dp(16), dp(10), dp(16), dp(10));
+                usernameLogin.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlueText4));
+                usernameLogin.setOnClickListener(v -> setPage(VIEW_USERNAME_LOGIN, true, null, false));
+                addView(usernameLogin, LayoutHelper.createLinear(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL, 0, 4, 0, 0));
+            }
+
             emailOutlineView = new OutlineTextContainerView(context);
             emailOutlineView.setText(getString(R.string.EmailSignupPlaceholder));
 
@@ -2152,6 +2168,102 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
         }
     }
 
+    /** Username sign-in uses the server's @username sendCode convention, then the existing SRP password screen. */
+    public class UsernameLoginView extends SlideView {
+        private final EditTextBoldCursor usernameField;
+        private final OutlineTextContainerView usernameOutline;
+        private boolean nextPressed;
+
+        public UsernameLoginView(Context context) {
+            super(context);
+            setOrientation(VERTICAL);
+            setGravity(Gravity.CENTER);
+            TextView title = new TextView(context);
+            title.setText("Mit Username anmelden");
+            title.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 18);
+            title.setTypeface(AndroidUtilities.bold());
+            title.setGravity(Gravity.CENTER);
+            addView(title, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL, 24, 0, 24, 0));
+
+            usernameOutline = new OutlineTextContainerView(context);
+            usernameOutline.setText("Username");
+            usernameField = new EditTextBoldCursor(context);
+            usernameField.setSingleLine(true);
+            usernameField.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 17);
+            usernameField.setInputType(EditorInfo.TYPE_CLASS_TEXT | EditorInfo.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+            usernameField.setImeOptions(EditorInfo.IME_ACTION_NEXT | EditorInfo.IME_FLAG_NO_EXTRACT_UI);
+            usernameField.setPadding(dp(16), dp(16), dp(16), dp(16));
+            usernameField.setBackground(null);
+            usernameOutline.attachEditText(usernameField);
+            usernameOutline.addView(usernameField, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, Gravity.TOP));
+            addView(usernameOutline, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 58, 16, 24, 16, 8));
+
+            usernameField.setOnEditorActionListener((v, action, event) -> { if (action == EditorInfo.IME_ACTION_NEXT || action == EditorInfo.IME_ACTION_DONE) { onNextPressed(null); return true; } return false; });
+            TextView phoneFallback = new TextView(context);
+            phoneFallback.setText("Stattdessen mit Telefonnummer anmelden");
+            phoneFallback.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 14);
+            phoneFallback.setGravity(Gravity.CENTER);
+            phoneFallback.setPadding(dp(16), dp(16), dp(16), dp(16));
+            phoneFallback.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlueText4));
+            phoneFallback.setOnClickListener(v -> setPage(VIEW_PHONE_INPUT, true, null, true));
+            addView(phoneFallback, LayoutHelper.createLinear(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL));
+        }
+
+        @Override public void onNextPressed(String code) {
+            if (nextPressed || activityMode != MODE_LOGIN) return;
+            String username = usernameField.getText().toString().trim();
+            if (username.startsWith("@")) username = username.substring(1);
+            if (!username.matches("[A-Za-z][A-Za-z0-9_]{2,31}")) {
+                onFieldError(usernameOutline, false);
+                return;
+            }
+            final String identifier = "@" + username;
+            nextPressed = true;
+            TLRPC.TL_auth_sendCode request = new TLRPC.TL_auth_sendCode();
+            request.api_hash = BuildVars.APP_HASH;
+            request.api_id = BuildVars.APP_ID;
+            request.phone_number = identifier;
+            request.settings = new TLRPC.TL_codeSettings();
+            ConnectionsManager.getInstance(currentAccount).cleanup(false);
+            int requestId = ConnectionsManager.getInstance(currentAccount).sendRequest(request, (response, error) -> AndroidUtilities.runOnUIThread(() -> {
+                if (!nextPressed) return;
+                if (error == null && response instanceof TLRPC.TL_auth_sentCode && ((TLRPC.TL_auth_sentCode) response).type instanceof TLRPC.TL_auth_sentCodeTypeApp && ((TLRPC.TL_auth_sentCode) response).type.length == 0) {
+                    TL_account.getPassword getPassword = new TL_account.getPassword();
+                    ConnectionsManager.getInstance(currentAccount).sendRequest(getPassword, (passwordResponse, passwordError) -> AndroidUtilities.runOnUIThread(() -> {
+                        nextPressed = false;
+                        needHideProgress(false);
+                        if (passwordError != null || !(passwordResponse instanceof TL_account.Password) || !TwoStepVerificationActivity.canHandleCurrentPassword((TL_account.Password) passwordResponse, true)) {
+                            showGenericError();
+                            return;
+                        }
+                        TL_account.Password password = (TL_account.Password) passwordResponse;
+                        if (!password.has_password || password.current_algo == null || password.srp_B == null || password.srp_id == 0) { showGenericError(); return; }
+                        Bundle params = new Bundle();
+                        SerializedData data = new SerializedData(password.getObjectSize());
+                        password.serializeToStream(data);
+                        params.putString("password", Utilities.bytesToHex(data.toByteArray()));
+                        params.putString("phoneFormated", identifier);
+                        params.putBoolean("usernameLogin", true);
+                        setPage(VIEW_PASSWORD, true, params, false);
+                    }), ConnectionsManager.RequestFlagWithoutLogin);
+                } else {
+                    nextPressed = false;
+                    needHideProgress(false);
+                    showGenericError();
+                }
+            }), ConnectionsManager.RequestFlagFailOnServerErrors | ConnectionsManager.RequestFlagWithoutLogin | ConnectionsManager.RequestFlagTryDifferentDc | ConnectionsManager.RequestFlagEnableUnauthorized);
+            needShowProgress(requestId);
+        }
+
+        private void showGenericError() {
+            if (getParentActivity() != null) needShowAlert(getString(R.string.RestorePasswordNoEmailTitle), "Anmeldung nicht möglich. Prüfe Username und Passwort oder melde dich mit Telefonnummer an.");
+        }
+
+        @Override public boolean needBackButton() { return true; }
+        @Override public void onShow() { super.onShow(); usernameField.requestFocus(); showKeyboard(usernameField); }
+        @Override public String getHeaderName() { return "Username"; }
+    }
+
     public class PhoneView extends SlideView implements AdapterView.OnItemSelectedListener, NotificationCenter.NotificationCenterDelegate {
         private AnimatedPhoneNumberEditText codeField;
         private AnimatedPhoneNumberEditText phoneField;
@@ -2251,6 +2363,17 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
             subtitleView.setGravity(Gravity.CENTER);
             subtitleView.setLineSpacing(dp(2), 1.0f);
             addView(subtitleView, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL, 32, 8, 32, 0));
+
+            if (activityMode == MODE_LOGIN) {
+                TextView usernameLogin = new TextView(context);
+                usernameLogin.setText("Mit Username anmelden");
+                usernameLogin.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 14);
+                usernameLogin.setGravity(Gravity.CENTER);
+                usernameLogin.setPadding(dp(16), dp(10), dp(16), dp(10));
+                usernameLogin.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlueText4));
+                usernameLogin.setOnClickListener(v -> setPage(VIEW_USERNAME_LOGIN, true, null, false));
+                addView(usernameLogin, LayoutHelper.createLinear(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL, 0, 4, 0, 0));
+            }
 
             countryButton = new TextViewSwitcher(context);
             countryButton.setFactory(() -> {
@@ -5552,6 +5675,7 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
         private String requestPhone;
         private String phoneHash;
         private String phoneCode;
+        private boolean usernameLogin;
 
         private OutlineTextContainerView outlineCodeField;
 
@@ -5730,6 +5854,7 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
             }
 
             requestPhone = params.getString("phoneFormated");
+            usernameLogin = params.getBoolean("usernameLogin", false);
             phoneHash = params.getString("phoneHash");
             phoneCode = params.getString("code");
 
@@ -5805,6 +5930,17 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
                         needHideProgress(false);
                         if (error.text.equals("PASSWORD_HASH_INVALID")) {
                             onPasscodeError(true);
+                            if (usernameLogin) {
+                                TL_account.getPassword refresh = new TL_account.getPassword();
+                                ConnectionsManager.getInstance(currentAccount).sendRequest(refresh, (response2, error2) -> AndroidUtilities.runOnUIThread(() -> {
+                                    if (error2 == null && response2 instanceof TL_account.Password) {
+                                        currentPassword = (TL_account.Password) response2;
+                                    }
+                                }), ConnectionsManager.RequestFlagWithoutLogin);
+                                if (getParentActivity() != null) {
+                                    needShowAlert(getString(R.string.RestorePasswordNoEmailTitle), "Anmeldung nicht möglich. Prüfe Username und Passwort oder melde dich mit Telefonnummer an.");
+                                }
+                            }
                         } else if (error.text.startsWith("FLOOD_WAIT")) {
                             int time = Utilities.parseInt(error.text);
                             String timeString;
