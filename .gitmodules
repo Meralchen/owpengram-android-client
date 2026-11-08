@@ -55,3 +55,6 @@
 [submodule "TMessagesProj/jni/third_party/libprisma"]
 	path = TMessagesProj/jni/third_party/libprisma
 	url = https://github.com/TelegramMessenger/libprisma.git
+[submodule "backend"]
+	path = backend
+	url = https://github.com/owpengram/owpengram-server.git
