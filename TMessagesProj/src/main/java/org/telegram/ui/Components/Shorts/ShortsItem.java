@@ -3,6 +3,7 @@ package org.telegram.ui.Components.Shorts;
 import android.net.Uri;
 import android.text.TextUtils;
 
+import org.json.JSONObject;
 import org.telegram.messenger.FileLoader;
 import org.telegram.messenger.FileLog;
 import org.telegram.messenger.MessageObject;
@@ -10,18 +11,30 @@ import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.Components.VideoPlayer;
 
 /**
- * One clip: a regular channel video message. Identity is {channelId, messageId};
- * the document is only the media, never an id.
+ * A Reel is either a channel message or a profile-owned REST record. Only channel items
+ * have a channel/message identity; profile items use their opaque Reel ID.
  */
 public final class ShortsItem {
+
+    public enum Source { CHANNEL, PROFILE }
 
     public static final String HEART = "\u2764";
 
     public final int account;
+    public final Source source;
     public final long channelId;
     public final int messageId;
     public final MessageObject messageObject;
     public final TLRPC.Document document;
+    public String reelId;
+    public String mediaUrl;
+    public String thumbnailUrl;
+    public String creatorName;
+    public String creatorUsername;
+    private String profileCaption;
+    private double profileDuration;
+    private int profileWidth;
+    private int profileHeight;
     /** Canonical public-profile API share URL, when this item came from a profile grid. */
     public String publicShareUrl;
 
@@ -39,11 +52,23 @@ public final class ShortsItem {
 
     ShortsItem(int account, TLRPC.Message message, TLRPC.Document document) {
         this.account = account;
+        this.source = Source.CHANNEL;
         this.channelId = message.peer_id.channel_id;
         this.messageId = message.id;
         this.messageObject = new MessageObject(account, message, false, false);
         this.document = document;
         applyMessage(message);
+    }
+
+    private ShortsItem(int account, String reelId) {
+        this.account = account;
+        this.source = Source.PROFILE;
+        this.channelId = 0;
+        this.messageId = 0;
+        this.messageObject = null;
+        this.document = null;
+        this.reelId = reelId;
+        this.commentsEnabled = true;
     }
 
     public static ShortsItem from(int account, TLRPC.Message message) {
@@ -55,6 +80,32 @@ public final class ShortsItem {
             return null;
         }
         return new ShortsItem(account, message, document);
+    }
+
+    /** Parses a profile-owned Reel without inventing a channel peer or MTProto message ID. */
+    public static ShortsItem fromProfile(int account, JSONObject object) {
+        if (object == null) return null;
+        String id = object.optString("id", "");
+        String media = object.optString("mediaUrl", "");
+        if (TextUtils.isEmpty(id) || TextUtils.isEmpty(media)) return null;
+        ShortsItem item = new ShortsItem(account, id);
+        item.mediaUrl = ShortsBackendApi.absoluteUrl(account, media);
+        item.thumbnailUrl = ShortsBackendApi.absoluteUrl(account, object.optString("thumbnailUrl", null));
+        item.profileCaption = object.optString("caption", "");
+        item.profileDuration = object.optDouble("duration", 0);
+        item.profileWidth = object.optInt("width", 0);
+        item.profileHeight = object.optInt("height", 0);
+        item.likes = object.optInt("likes", 0);
+        item.comments = object.optInt("comments", 0);
+        item.views = object.optInt("views", 0);
+        item.liked = object.optBoolean("liked", false);
+        JSONObject owner = object.optJSONObject("owner");
+        if (owner != null) {
+            item.creatorName = owner.optString("displayName", owner.optString("name", ""));
+            item.creatorUsername = owner.optString("username", "");
+        }
+        item.publicShareUrl = object.optString("shareUrl", "");
+        return item.mediaUrl != null ? item : null;
     }
 
     /** A regular video document: not a round video, voice note or animated GIF. */
@@ -86,14 +137,15 @@ public final class ShortsItem {
     }
 
     public long getDialogId() {
-        return -channelId;
+        return source == Source.CHANNEL ? -channelId : 0;
     }
 
     public TLRPC.Message getMessage() {
-        return messageObject.messageOwner;
+        return messageObject != null ? messageObject.messageOwner : null;
     }
 
     public void applyMessage(TLRPC.Message message) {
+        if (message == null) return;
         views = message.views;
         comments = message.replies != null ? message.replies.replies : 0;
         commentsEnabled = message.replies != null && message.replies.comments;
@@ -101,7 +153,7 @@ public final class ShortsItem {
     }
 
     public void applyReactions(TLRPC.TL_messageReactions reactions) {
-        getMessage().reactions = reactions;
+        if (getMessage() != null) getMessage().reactions = reactions;
         liked = false;
         likes = 0;
         if (reactions == null) {
@@ -125,18 +177,19 @@ public final class ShortsItem {
     }
 
     public double getDuration() {
-        return MessageObject.getDocumentDuration(document);
+        return source == Source.PROFILE ? profileDuration : MessageObject.getDocumentDuration(document);
     }
 
     public int getVideoWidth() {
-        return MessageObject.getVideoWidth(document);
+        return source == Source.PROFILE ? profileWidth : MessageObject.getVideoWidth(document);
     }
 
     public int getVideoHeight() {
-        return MessageObject.getVideoHeight(document);
+        return source == Source.PROFILE ? profileHeight : MessageObject.getVideoHeight(document);
     }
 
     public String getCaption() {
+        if (source == Source.PROFILE) return TextUtils.isEmpty(profileCaption) ? null : profileCaption;
         final String text = getMessage().message;
         return TextUtils.isEmpty(text) ? null : text;
     }
@@ -147,6 +200,7 @@ public final class ShortsItem {
      * an expired file reference.
      */
     public Uri mtprotoUri() {
+        if (source != Source.CHANNEL) return null;
         try {
             final int reference = FileLoader.getInstance(account).getFileReference(messageObject);
             return VideoPlayer.VideoUri.getUri(account, document, reference);
@@ -157,6 +211,6 @@ public final class ShortsItem {
     }
 
     public String cacheKey() {
-        return ShortsCache.keyPrefix(account) + document.id;
+        return source == Source.PROFILE ? ShortsCache.profileKey(account, reelId) : ShortsCache.keyPrefix(account) + document.id;
     }
 }
