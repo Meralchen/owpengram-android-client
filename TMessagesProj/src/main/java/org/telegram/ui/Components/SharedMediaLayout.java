@@ -3861,8 +3861,8 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
         final boolean ownProfile = dialog_id == UserConfig.getInstance(account).getClientUserId();
         page.profileReelsView = new ShortsProfileReelsView(getContext(), account, profileUsername, ownProfile, new ShortsProfileReelsView.Delegate() {
             @Override public void onOpen(ShortsItem item) {
-                final ProfileActivity host = profileActivity;
-                if (host != null) {
+                if (profileActivity instanceof ProfileActivity) {
+                    final ProfileActivity host = (ProfileActivity) profileActivity;
                     final ShortsActivity viewer = new ShortsActivity(item);
                     host.setReelsViewerActive(true);
                     viewer.setExitAction(() -> host.setReelsViewerActive(false));

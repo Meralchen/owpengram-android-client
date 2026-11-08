@@ -301,7 +301,7 @@ public final class ShortsProfileReelsView extends FrameLayout implements Notific
             setBackgroundColor(Theme.getColor(Theme.key_windowBackgroundGray));
             if (entry.item != null && entry.item.source == ShortsItem.Source.PROFILE) {
                 if (!TextUtils.isEmpty(entry.item.thumbnailUrl)) {
-                    image.setImage(ImageLocation.getForPath(entry.item.thumbnailUrl), "320_320", null, null);
+                    image.setImage(ImageLocation.getForPath(entry.item.thumbnailUrl), "320_320", (android.graphics.drawable.Drawable) null, null);
                 } else {
                     image.clearImage();
                 }

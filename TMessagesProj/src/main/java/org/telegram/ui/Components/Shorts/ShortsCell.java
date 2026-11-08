@@ -375,7 +375,7 @@ public class ShortsCell extends FrameLayout {
                 subtitleView.setText(username != null ? "@" + username : LocaleController.formatDateAudio(item.getMessage().date, false));
             } else {
                 if (!TextUtils.isEmpty(item.thumbnailUrl)) {
-                    thumbView.setImage(ImageLocation.getForPath(item.thumbnailUrl), "1280_1280", null, null);
+                    thumbView.setImage(ImageLocation.getForPath(item.thumbnailUrl), "1280_1280", (android.graphics.drawable.Drawable) null, null);
                 } else {
                     thumbView.clearImage();
                 }
