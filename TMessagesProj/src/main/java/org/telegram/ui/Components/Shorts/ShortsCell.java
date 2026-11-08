@@ -103,6 +103,7 @@ public class ShortsCell extends FrameLayout {
     private ExoPlayer player;
     private int videoWidth, videoHeight;
     private boolean userPaused;
+    private boolean heartFollowing;
 
     private final Player.Listener playerListener = new Player.Listener() {
         @Override
@@ -229,25 +230,25 @@ public class ShortsCell extends FrameLayout {
         captionView = text(context, 14, false);
         captionView.setMaxLines(3);
         captionView.setEllipsize(TextUtils.TruncateAt.END);
-        bottom.addView(captionView, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 16, 0, 16, 8));
+        bottom.addView(captionView, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 16, 0, 88, 8));
 
-        final LinearLayout actions = new LinearLayout(context);
-        actions.setOrientation(LinearLayout.HORIZONTAL);
-        actions.setGravity(Gravity.CENTER_VERTICAL);
-        bottom.addView(actions, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 48, 8, 0, 8, 0));
+        final LinearLayout actionRail = new LinearLayout(context);
+        actionRail.setOrientation(LinearLayout.VERTICAL);
+        actionRail.setGravity(Gravity.CENTER_HORIZONTAL);
+        addView(actionRail, LayoutHelper.createFrame(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT, Gravity.RIGHT | Gravity.BOTTOM, 0, 0, 10, AndroidUtilities.navigationBarHeight + 22));
         likeButton = new ActionButton(context, R.drawable.media_like);
         likeButton.setOnClickListener(v -> delegate.onToggleLike(this, false));
-        actions.addView(likeButton, LayoutHelper.createLinear(0, LayoutHelper.MATCH_PARENT, 1f));
-        commentsButton = new ActionButton(context, R.drawable.menu_comments);
-        commentsButton.setOnClickListener(v -> delegate.onOpenComments(this));
-        actions.addView(commentsButton, LayoutHelper.createLinear(0, LayoutHelper.MATCH_PARENT, 1f));
+        actionRail.addView(likeButton, LayoutHelper.createLinear(LayoutHelper.WRAP_CONTENT, 52));
         shareButton = new ActionButton(context, R.drawable.msg_share);
         shareButton.setOnClickListener(v -> delegate.onShare(this));
         shareButton.setContentDescription(LocaleController.getString(R.string.ShortsShare));
-        actions.addView(shareButton, LayoutHelper.createLinear(0, LayoutHelper.MATCH_PARENT, 1f));
+        actionRail.addView(shareButton, LayoutHelper.createLinear(LayoutHelper.WRAP_CONTENT, 52));
+        commentsButton = new ActionButton(context, R.drawable.menu_comments);
+        commentsButton.setOnClickListener(v -> delegate.onOpenComments(this));
+        actionRail.addView(commentsButton, LayoutHelper.createLinear(LayoutHelper.WRAP_CONTENT, 52));
         viewsButton = new ActionButton(context, R.drawable.msg_views);
         viewsButton.setClickable(false);
-        actions.addView(viewsButton, LayoutHelper.createLinear(0, LayoutHelper.MATCH_PARENT, 1f));
+        actionRail.addView(viewsButton, LayoutHelper.createLinear(LayoutHelper.WRAP_CONTENT, 52));
 
         gestureDetector = new GestureDetector(context, new GestureDetector.SimpleOnGestureListener() {
             @Override
@@ -267,8 +268,30 @@ public class ShortsCell extends FrameLayout {
                 if (item != null && !item.liked) {
                     delegate.onToggleLike(ShortsCell.this, true);
                 }
-                showHeart();
+                showHeart(e.getX(), e.getY());
                 return true;
+            }
+
+            @Override
+            public void onLongPress(@NonNull MotionEvent e) {
+                if (item == null) return;
+                heartFollowing = true;
+                if (!item.liked) delegate.onToggleLike(ShortsCell.this, true);
+                positionHeart(e.getX(), e.getY());
+                heartView.animate().cancel();
+                heartView.setVisibility(VISIBLE);
+                heartView.setAlpha(1f);
+                heartView.setScaleX(1f);
+                heartView.setScaleY(1f);
+            }
+
+            @Override
+            public boolean onScroll(MotionEvent down, MotionEvent current, float distanceX, float distanceY) {
+                if (heartFollowing) {
+                    positionHeart(current.getX(), current.getY());
+                    return true;
+                }
+                return false;
             }
         });
         updateThemeColors();
@@ -430,8 +453,18 @@ public class ShortsCell extends FrameLayout {
         playIcon.setVisibility(userPaused ? VISIBLE : GONE);
     }
 
-    public void showHeart() {
+    private void positionHeart(float x, float y) {
+        final float heartSize = dp(96);
+        final float effectSize = dp(220);
+        heartView.setX(Math.max(0, Math.min(getWidth() - heartSize, x - heartSize / 2f)));
+        heartView.setY(Math.max(0, Math.min(getHeight() - heartSize, y - heartSize / 2f)));
+        heartEffectView.setX(Math.max(0, Math.min(getWidth() - effectSize, x - effectSize / 2f)));
+        heartEffectView.setY(Math.max(0, Math.min(getHeight() - effectSize, y - effectSize / 2f)));
+    }
+
+    public void showHeart(float x, float y) {
         heartView.animate().cancel();
+        positionHeart(x, y);
         if (ShortsActivity.isReducedMotion()) {
             heartView.setVisibility(VISIBLE);
             heartView.setAlpha(1f);
@@ -482,7 +515,18 @@ public class ShortsCell extends FrameLayout {
     @SuppressLint("ClickableViewAccessibility")
     @Override
     public boolean onTouchEvent(MotionEvent event) {
-        return gestureDetector.onTouchEvent(event) || super.onTouchEvent(event);
+        final boolean handled = gestureDetector.onTouchEvent(event);
+        if (heartFollowing) {
+            if (event.getActionMasked() == MotionEvent.ACTION_MOVE) {
+                positionHeart(event.getX(), event.getY());
+            } else if (event.getActionMasked() == MotionEvent.ACTION_UP || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+                heartFollowing = false;
+                heartView.animate().alpha(0f).setDuration(180).withEndAction(() -> heartView.setVisibility(GONE)).start();
+                hideHeartEffect();
+            }
+            return true;
+        }
+        return handled || super.onTouchEvent(event);
     }
 
     @Override

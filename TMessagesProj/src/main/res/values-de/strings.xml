@@ -1375,7 +1375,7 @@
     <string name="RemindTodayAt">\'Heute um\' HH:mm \'erinnern\'</string>
     <string name="RemindDayAt">\'Am\' d MMM \'um\' HH:mm \'erinnern\'</string>
     <string name="RemindDayYearAt">\'Am\' d\'.\' MMM yyyy \'um\' HH:mm \'erinnern\'</string>
-    <string name="ShortsTitle">Clips</string>
+    <string name="ShortsTitle">Reels</string>
     <string name="ShortsEmpty">Noch keine Kanalvideos.</string>
     <string name="ShortsShare">Teilen</string>
     <string name="ShortsComments">Kommentare</string>

@@ -10,12 +10,12 @@ import android.view.ViewConfiguration;
 
 import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.LinearSmoothScroller;
 import androidx.recyclerview.widget.PagerSnapHelper;
 import androidx.recyclerview.widget.RecyclerView;
 
 /**
- * Fullscreen horizontal snap pager. The layout is reversed so that moving the finger to the
- * right reveals the next clip and moving it to the left the previous one.
+ * Fullscreen horizontal snap pager. Swiping from right to left advances to the next clip.
  * <p>
  * Axis arbitration: the axis is chosen once the touch passes touch slop and one axis dominates
  * the other by {@link #AXIS_DOMINANCE}. Only horizontal drags reach the RecyclerView; vertical
@@ -34,8 +34,8 @@ public class ShortsViewPager extends RecyclerView {
     public interface Listener {
         void onPageSelected(int position);
 
-        /** up = finger moved up (open channel), otherwise down (open comments). */
-        void onVerticalSwipe(boolean up);
+        /** Finger down opens the channel; finger up opens comments. */
+        void onVerticalSwipe(boolean fingerDown);
     }
 
     private final LinearLayoutManager layoutManager;
@@ -51,7 +51,7 @@ public class ShortsViewPager extends RecyclerView {
     public ShortsViewPager(@NonNull Context context) {
         super(context);
         touchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
-        layoutManager = new LinearLayoutManager(context, HORIZONTAL, true) {
+        layoutManager = new LinearLayoutManager(context, HORIZONTAL, false) {
             @Override
             public boolean supportsPredictiveItemAnimations() {
                 return false;
@@ -90,7 +90,12 @@ public class ShortsViewPager extends RecyclerView {
             return;
         }
         if (smooth && !ShortsActivity.isReducedMotion()) {
-            smoothScrollToPosition(position);
+            final LinearSmoothScroller scroller = new LinearSmoothScroller(getContext()) {
+                @Override protected int calculateTimeForScrolling(int dx) { return 220; }
+                @Override protected int calculateTimeForDeceleration(int dx) { return 320; }
+            };
+            scroller.setTargetPosition(position);
+            layoutManager.startSmoothScroll(scroller);
         } else {
             layoutManager.scrollToPositionWithOffset(position, 0);
             post(this::dispatchCurrentPage);
@@ -163,7 +168,7 @@ public class ShortsViewPager extends RecyclerView {
         if (action == MotionEvent.ACTION_UP && axis == AXIS_VERTICAL && !childOwnsGesture) {
             final float dy = e.getY() - downY;
             if (Math.abs(dy) > dp(VERTICAL_TRIGGER_DP) && listener != null) {
-                listener.onVerticalSwipe(dy < 0);
+                listener.onVerticalSwipe(dy > 0);
             }
         }
         if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {

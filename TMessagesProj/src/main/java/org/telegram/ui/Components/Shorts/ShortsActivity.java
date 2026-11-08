@@ -203,6 +203,10 @@ public class ShortsActivity extends BaseFragment implements NotificationCenter.N
             updateState();
             if (wasEmpty && !items.isEmpty() && pager != null) {
                 pager.setCurrentPage(0, false);
+            } else if (error == null && !endReached && page.isEmpty()) {
+                // Search pages can contain videos the Shorts validator rejects (GIFs,
+                // round videos or malformed documents). Keep paging until playable clips arrive.
+                loadMore();
             } else if (!endReached && !page.isEmpty() && currentPage >= items.size() - 3) {
                 loadMore();
             } else {
@@ -533,12 +537,12 @@ public class ShortsActivity extends BaseFragment implements NotificationCenter.N
     }
 
     @Override
-    public void onVerticalSwipe(boolean up) {
+    public void onVerticalSwipe(boolean fingerDown) {
         final ShortsCell cell = findCell(currentPage);
         if (cell == null) {
             return;
         }
-        if (up) {
+        if (fingerDown) {
             onOpenChannel(cell);
         } else {
             onOpenComments(cell);
