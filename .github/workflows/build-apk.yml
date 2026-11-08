@@ -56,9 +56,36 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          submodules: recursive
+          # The Go server is a separate submodule and is not needed to build the Android client.
+          # Its local gitlink may point at an unpublished server commit, so initialize only the
+          # Android source/native dependencies required by Gradle and CMake.
+          submodules: false
           fetch-depth: 1
           lfs: false
+
+      - name: Checkout Android submodules
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --force --depth=1 --recursive -- \
+            TMessagesProj/jni/td \
+            TMessagesProj/jni/tgcalls \
+            TMessagesProj/jni/tlottie \
+            TMessagesProj/jni/wallet-engine \
+            TMessagesProj/jni/third_party/absl \
+            TMessagesProj/jni/third_party/boost-regex \
+            TMessagesProj/jni/third_party/boringssl \
+            TMessagesProj/jni/third_party/dav1d \
+            TMessagesProj/jni/third_party/ffmpeg \
+            TMessagesProj/jni/third_party/libprisma \
+            TMessagesProj/jni/third_party/libvpx \
+            TMessagesProj/jni/third_party/libyuv \
+            TMessagesProj/jni/third_party/openh264 \
+            TMessagesProj/jni/third_party/wamr \
+            TMessagesProj/jni/third_party/xiph/ogg \
+            TMessagesProj/jni/third_party/xiph/opus \
+            TMessagesProj/jni/third_party/xiph/opusfile \
+            TMessagesProj/lib/jlatexmath \
+            TMessagesProj_Modules/media
 
       - uses: actions/setup-java@v4
         with:
