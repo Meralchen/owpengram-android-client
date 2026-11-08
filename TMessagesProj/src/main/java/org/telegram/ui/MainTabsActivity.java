@@ -153,6 +153,8 @@ public class MainTabsActivity extends ViewPagerActivity implements NotificationC
     private static final int ANIMATOR_ID_TABS_VISIBLE = 0;
     private final BoolAnimator animatorTabsVisible = new BoolAnimator(ANIMATOR_ID_TABS_VISIBLE,
         this, CubicBezierInterpolator.EASE_OUT_QUINT, 380, true);
+    private boolean tabsRequestedVisible = true;
+    private boolean reelsViewerActive;
 
 
     private IUpdateLayout updateLayout;
@@ -951,7 +953,15 @@ public class MainTabsActivity extends ViewPagerActivity implements NotificationC
     protected BaseFragment createBaseFragmentAt(int position) {
         final int tabId = tabAtPosition(position);
         if (tabId == TAB_REELS) {
-            return new org.telegram.ui.Components.Shorts.ShortsActivity();
+            final org.telegram.ui.Components.Shorts.ShortsActivity reels = new org.telegram.ui.Components.Shorts.ShortsActivity();
+            reels.setHomeAction(() -> {
+                final int chatsPosition = positionForTab(TAB_CHATS);
+                if (viewPager != null && chatsPosition >= 0) {
+                    selectTab(chatsPosition, true);
+                    viewPager.scrollToPosition(chatsPosition);
+                }
+            });
+            return reels;
         } else if (tabId == TAB_CONTACTS) {
             Bundle args = new Bundle();
             args.putBoolean("needPhonebook", true);
@@ -970,7 +980,9 @@ public class MainTabsActivity extends ViewPagerActivity implements NotificationC
             args.putBoolean("my_profile", true);
             // args.putBoolean("expandPhoto", true);
             args.putBoolean("hasMainTabs", true);
-            return new ProfileActivity(args);
+            final ProfileActivity profile = new ProfileActivity(args);
+            profile.setMainTabsActivityController(new MainTabsActivityControllerImpl());
+            return profile;
         }
         return null;
     }
@@ -984,10 +996,15 @@ public class MainTabsActivity extends ViewPagerActivity implements NotificationC
     public GlassTabView[] tabs;
 
     public void selectTab(int position, boolean animated) {
-        for (int a = 0; a < tabs.length; a++) {
-            GlassTabView tab = tabs[a];
-            tab.setSelected(a == position, animated);
+        if (tabs != null) {
+            for (int a = 0; a < tabs.length; a++) {
+                GlassTabView tab = tabs[a];
+                tab.setSelected(a == position, animated);
+            }
         }
+        final int tabId = tabAtPosition(position);
+        animatorTabsVisible.setValue(!reelsViewerActive && tabId != TAB_REELS
+                && (tabId != TAB_CHATS || tabsRequestedVisible), animated);
     }
 
     public void setGestureSelectedOverride(float animatedPosition, boolean allow) {
@@ -1227,7 +1244,14 @@ public class MainTabsActivity extends ViewPagerActivity implements NotificationC
     private class MainTabsActivityControllerImpl implements MainTabsActivityController {
         @Override
         public void setTabsVisible(boolean visible) {
-            animatorTabsVisible.setValue(visible, true);
+            tabsRequestedVisible = visible;
+            selectTab(viewPager != null ? viewPager.getCurrentPosition() : 0, true);
+        }
+
+        @Override
+        public void setReelsViewerActive(boolean active) {
+            reelsViewerActive = active;
+            selectTab(viewPager != null ? viewPager.getCurrentPosition() : 0, true);
         }
     }
 

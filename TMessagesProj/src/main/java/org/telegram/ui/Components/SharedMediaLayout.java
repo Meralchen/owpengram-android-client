@@ -15,6 +15,8 @@ import android.animation.ObjectAnimator;
 import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.content.Context;
+import android.content.Intent;
+import android.net.Uri;
 import android.content.DialogInterface;
 import android.content.res.Configuration;
 import android.graphics.Bitmap;
@@ -139,6 +141,7 @@ import org.telegram.ui.Components.Premium.LimitReachedBottomSheet;
 import org.telegram.ui.Components.Shorts.ShortsActivity;
 import org.telegram.ui.Components.Shorts.ShortsItem;
 import org.telegram.ui.Components.Shorts.ShortsProfileReelsView;
+import org.telegram.ui.Components.Shorts.ShortsProfileReelUploader;
 import org.telegram.ui.Components.Reactions.ReactionsLayoutInBubble;
 import org.telegram.ui.Components.blur3.BlurredBackgroundDrawableViewFactory;
 import org.telegram.ui.Components.blur3.ViewGroupPartRenderer;
@@ -3858,7 +3861,13 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
         final boolean ownProfile = dialog_id == UserConfig.getInstance(account).getClientUserId();
         page.profileReelsView = new ShortsProfileReelsView(getContext(), account, profileUsername, ownProfile, new ShortsProfileReelsView.Delegate() {
             @Override public void onOpen(ShortsItem item) {
-                if (profileActivity != null) profileActivity.presentFragment(new ShortsActivity(item));
+                final ProfileActivity host = profileActivity;
+                if (host != null) {
+                    final ShortsActivity viewer = new ShortsActivity(item);
+                    host.setReelsViewerActive(true);
+                    viewer.setExitAction(() -> host.setReelsViewerActive(false));
+                    host.presentFragment(viewer);
+                }
             }
 
             @Override public void onUpload() {
@@ -3870,38 +3879,26 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
         return page.profileReelsView;
     }
 
+    public static final int REQUEST_PROFILE_REEL = 592;
+
     private void startProfileReelUpload() {
         if (!isProfileReelsAvailable() || profileActivity == null) return;
+        if (dialog_id != UserConfig.getInstance(profileActivity.getCurrentAccount()).getClientUserId()) return;
+        final Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        picker.addCategory(Intent.CATEGORY_OPENABLE);
+        picker.setType("video/*");
+        picker.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        profileActivity.startActivityForResult(picker, REQUEST_PROFILE_REEL);
+    }
+
+    public void onProfileReelPicked(Uri uri) {
+        if (uri == null || profileActivity == null || dialog_id != UserConfig.getInstance(profileActivity.getCurrentAccount()).getClientUserId()) return;
         final int account = profileActivity.getCurrentAccount();
-        if (dialog_id != UserConfig.getInstance(account).getClientUserId()) return;
-        final Bundle args = new Bundle();
-        args.putBoolean("onlySelect", true);
-        args.putInt("dialogsType", DialogsActivity.DIALOGS_TYPE_CHANNELS_ONLY);
-        args.putString("selectAlertString", LocaleController.getString(R.string.ShortsChoosePublicChannel));
-        final DialogsActivity picker = new DialogsActivity(args);
-        picker.setDelegate((fragment, selected, message, param, notify, scheduleDate, scheduleRepeatPeriod, topicsFragment) -> {
-            if (selected == null || selected.isEmpty()) return false;
-            final long peerId = selected.get(0).dialogId;
-            final TLRPC.Chat chat = MessagesController.getInstance(account).getChat(-peerId);
-            if (chat == null || TextUtils.isEmpty(ChatObject.getPublicUsername(chat)) || !ChatObject.canPost(chat)) {
-                if (profileActivity.getParentActivity() != null) {
-                    new AlertDialog.Builder(profileActivity.getParentActivity())
-                            .setTitle(LocaleController.getString(R.string.AppName))
-                            .setMessage(LocaleController.getString(R.string.ShortsChoosePublicChannel))
-                            .setPositiveButton(LocaleController.getString(R.string.OK), null)
-                            .show();
-                }
-                return false;
+        new ShortsProfileReelUploader(profileActivity.getParentActivity(), account, uri, () -> {
+            for (MediaPage page : mediaPages) {
+                if (page != null && page.profileReelsView != null) page.profileReelsView.reload();
             }
-            final Bundle chatArgs = new Bundle();
-            chatArgs.putLong("chat_id", chat.id);
-            final ChatActivity chatActivity = new ChatActivity(chatArgs);
-            fragment.removeSelfFromStack();
-            profileActivity.presentFragment(chatActivity);
-            AndroidUtilities.runOnUIThread(chatActivity::openReelUploadPicker, 350);
-            return true;
-        });
-        profileActivity.presentFragment(picker);
+        }).start();
     }
 
     protected boolean isArchivedOnlyStoriesView() {
@@ -7067,12 +7064,19 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
                 }
             }
             if (isProfileReelsAvailable()) {
-                for (int i = tabs.size() - 1; i >= 0; i--) {
-                    if (tabs.get(i).first == TAB_STORIES || tabs.get(i).first == TAB_ARCHIVED_STORIES) tabs.remove(i);
+                int postsIndex = -1;
+                for (int i = 0; i < tabs.size(); i++) {
+                    if (tabs.get(i).first == TAB_PHOTOVIDEO) {
+                        postsIndex = i;
+                        tabs.set(i, new Pair(TAB_PHOTOVIDEO, getString(R.string.ProfilePosts)));
+                        break;
+                    }
                 }
-                tabs.add(0, new Pair(TAB_STORIES, getString(R.string.ProfilePosts)));
-                tabs.add(1, new Pair(TAB_ARCHIVED_STORIES, getString(R.string.ProfileArchived)));
-                tabs.add(2, new Pair(TAB_REELS, getString(R.string.ShortsTitle)));
+                if (postsIndex < 0) {
+                    tabs.add(0, new Pair(TAB_PHOTOVIDEO, getString(R.string.ProfilePosts)));
+                    postsIndex = 0;
+                }
+                tabs.add(postsIndex + 1, new Pair(TAB_REELS, getString(R.string.ShortsTitle)));
             }
             if (hasGifts) {
                 tabs.add(new Pair(TAB_GIFTS, TextUtils.concat(getString(R.string.ProfileGifts), giftsContainer.getLastEmojis(null))));

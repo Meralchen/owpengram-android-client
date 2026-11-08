@@ -16,6 +16,7 @@ import android.graphics.PorterDuffColorFilter;
 import android.graphics.RectF;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
+import android.os.SystemClock;
 import android.text.TextPaint;
 import android.text.TextUtils;
 import android.util.TypedValue;
@@ -24,6 +25,7 @@ import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.TextureView;
 import android.view.View;
+import android.view.ViewConfiguration;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
@@ -104,6 +106,7 @@ public class ShortsCell extends FrameLayout {
     private int videoWidth, videoHeight;
     private boolean userPaused;
     private boolean heartFollowing;
+    private long lastDoubleTapTime;
 
     private final Player.Listener playerListener = new Player.Listener() {
         @Override
@@ -259,12 +262,16 @@ public class ShortsCell extends FrameLayout {
             // Fires only after the double-tap timeout, so a double tap never also toggles playback.
             @Override
             public boolean onSingleTapConfirmed(@NonNull MotionEvent e) {
+                if (SystemClock.uptimeMillis() - lastDoubleTapTime < ViewConfiguration.getDoubleTapTimeout() * 2L) {
+                    return true;
+                }
                 delegate.onTogglePlay(ShortsCell.this);
                 return true;
             }
 
             @Override
             public boolean onDoubleTap(@NonNull MotionEvent e) {
+                lastDoubleTapTime = SystemClock.uptimeMillis();
                 if (item != null && !item.liked) {
                     delegate.onToggleLike(ShortsCell.this, true);
                 }
@@ -318,17 +325,16 @@ public class ShortsCell extends FrameLayout {
     }
 
     public void updateThemeColors() {
-        final int surface = Theme.getColor(Theme.key_windowBackgroundWhite);
-        final int text = Theme.getColor(Theme.key_windowBackgroundWhiteBlackText);
-        final int accent = Theme.getColor(Theme.key_windowBackgroundWhiteBlueText4);
-        setBackgroundColor(surface);
+        final int text = Color.WHITE;
+        final int accent = Color.WHITE;
+        setBackgroundColor(Color.BLACK);
         progressView.setProgressColor(accent);
         playIcon.setColorFilter(new PorterDuffColorFilter(text, PorterDuff.Mode.SRC_IN));
-        playIcon.setBackground(circle(Theme.multAlpha(surface, 0.88f)));
-        topShade.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{Theme.multAlpha(surface, 0.94f), Theme.multAlpha(surface, 0.5f), 0}));
-        bottomShade.setBackground(new GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, new int[]{Theme.multAlpha(surface, 0.96f), Theme.multAlpha(surface, 0.52f), 0}));
+        playIcon.setBackground(circle(0x66000000));
+        topShade.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{0x99000000, 0x44000000, 0}));
+        bottomShade.setBackground(new GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, new int[]{0xAA000000, 0x44000000, 0}));
         titleView.setTextColor(text);
-        subtitleView.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteGrayText));
+        subtitleView.setTextColor(0xCCFFFFFF);
         captionView.setTextColor(text);
         timelineView.updateThemeColors(text, accent);
         for (ActionButton button : new ActionButton[]{likeButton, commentsButton, shareButton, viewsButton}) {
@@ -358,14 +364,27 @@ public class ShortsCell extends FrameLayout {
             videoHeight = item.getVideoHeight();
             thumbView.animate().cancel();
             thumbView.setAlpha(1f);
-            final TLRPC.PhotoSize thumb = FileLoader.getClosestPhotoSizeWithSize(item.document.thumbs, 1280);
-            thumbView.setImage(ImageLocation.getForDocument(thumb, item.document), null, (android.graphics.drawable.Drawable) null, item.messageObject);
-            final TLRPC.Chat chat = MessagesController.getInstance(item.account).getChat(item.channelId);
-            avatarDrawable.setInfo(item.account, chat);
-            avatarView.setForUserOrChat(chat, avatarDrawable);
-            titleView.setText(chat != null ? chat.title : "");
-            final String username = chat != null ? ChatObject.getPublicUsername(chat) : null;
-            subtitleView.setText(username != null ? "@" + username : LocaleController.formatDateAudio(item.getMessage().date, false));
+            if (item.source == ShortsItem.Source.CHANNEL) {
+                final TLRPC.PhotoSize thumb = FileLoader.getClosestPhotoSizeWithSize(item.document.thumbs, 1280);
+                thumbView.setImage(ImageLocation.getForDocument(thumb, item.document), null, (android.graphics.drawable.Drawable) null, item.messageObject);
+                final TLRPC.Chat chat = MessagesController.getInstance(item.account).getChat(item.channelId);
+                avatarDrawable.setInfo(item.account, chat);
+                avatarView.setForUserOrChat(chat, avatarDrawable);
+                titleView.setText(chat != null ? chat.title : "");
+                final String username = chat != null ? ChatObject.getPublicUsername(chat) : null;
+                subtitleView.setText(username != null ? "@" + username : LocaleController.formatDateAudio(item.getMessage().date, false));
+            } else {
+                if (!TextUtils.isEmpty(item.thumbnailUrl)) {
+                    thumbView.setImage(ImageLocation.getForPath(item.thumbnailUrl), "1280_1280", null, null);
+                } else {
+                    thumbView.clearImage();
+                }
+                final String name = TextUtils.isEmpty(item.creatorName) ? item.creatorUsername : item.creatorName;
+                avatarDrawable.setInfo(item.creatorUsername != null ? item.creatorUsername.hashCode() : 0, name, null);
+                avatarView.setImageDrawable(avatarDrawable);
+                titleView.setText(name != null ? name : "");
+                subtitleView.setText(TextUtils.isEmpty(item.creatorUsername) ? "" : "@" + item.creatorUsername);
+            }
             final String caption = item.getCaption();
             captionView.setText(caption);
             captionView.setVisibility(caption != null ? VISIBLE : GONE);
@@ -707,11 +726,11 @@ public class ShortsCell extends FrameLayout {
             for (int i = 0; i < count; i++) {
                 final float sl = left + i * (segWidth + gap), sr = sl + segWidth;
                 rect.set(sl, barTop, sr, barBottom);
-                barPaint.setColor(Theme.multAlpha(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText), 0.24f));
+                barPaint.setColor(0x66FFFFFF);
                 canvas.drawRoundRect(rect, dp(2), dp(2), barPaint);
                 if (filledX > sl) {
                     rect.set(sl, barTop, Math.min(sr, filledX), barBottom);
-                    barPaint.setColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlueText4));
+                    barPaint.setColor(Color.WHITE);
                     canvas.drawRoundRect(rect, dp(2), dp(2), barPaint);
                 }
             }

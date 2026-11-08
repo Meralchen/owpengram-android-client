@@ -6,6 +6,7 @@ import androidx.annotation.OptIn;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.database.StandaloneDatabaseProvider;
 import androidx.media3.datasource.DataSource;
+import androidx.media3.datasource.DefaultHttpDataSource;
 import androidx.media3.datasource.cache.CacheDataSource;
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor;
 import androidx.media3.datasource.cache.SimpleCache;
@@ -17,11 +18,11 @@ import org.telegram.messenger.Utilities;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Collections;
 
 /**
- * Process-wide LRU cache (<= 512 MiB, private app dir) in front of the MTProto
- * upload.getFile data source. Keys are "shorts:{account}:{documentId}" so a
- * logout can drop exactly that account's media.
+ * Process-wide LRU cache (<= 512 MiB, private app dir) for channel MTProto streams and
+ * authenticated profile-Reel media. Keys are account-scoped so logout drops only that account.
  */
 @OptIn(markerClass = UnstableApi.class)
 public final class ShortsCache {
@@ -52,12 +53,26 @@ public final class ShortsCache {
         return "shorts:" + account + ":";
     }
 
-    /** Never fakes an HTTP URL: upstream is the MTProto stream that refreshes file references. */
+    static String profileKey(int account, String reelId) {
+        return "shorts-profile:" + account + ":" + reelId;
+    }
+
+    /** Keeps channel media on MTProto and profile media on authenticated byte-range HTTP. */
     public static DataSource.Factory dataSourceFactory(Context context, ShortsItem item) {
         final String key = item.cacheKey();
+        final DataSource.Factory upstream;
+        if (item.source == ShortsItem.Source.PROFILE) {
+            final DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory();
+            if (item.playbackAuthorizationHeader != null) {
+                http.setDefaultRequestProperties(Collections.singletonMap("Authorization", item.playbackAuthorizationHeader));
+            }
+            upstream = http;
+        } else {
+            upstream = FileStreamLoadOperation::new;
+        }
         return new CacheDataSource.Factory()
                 .setCache(get(context))
-                .setUpstreamDataSourceFactory(FileStreamLoadOperation::new)
+                .setUpstreamDataSourceFactory(upstream)
                 .setCacheKeyFactory(dataSpec -> key)
                 .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR);
     }
@@ -72,8 +87,9 @@ public final class ShortsCache {
             try {
                 final SimpleCache c = get(ApplicationLoader.applicationContext);
                 final String prefix = keyPrefix(account);
+                final String profilePrefix = "shorts-profile:" + account + ":";
                 for (String key : new ArrayList<>(c.getKeys())) {
-                    if (key.startsWith(prefix)) {
+                    if (key.startsWith(prefix) || key.startsWith(profilePrefix)) {
                         c.removeResource(key);
                     }
                 }

@@ -101,6 +101,50 @@ public final class ShortsBackendApi {
         }
     }
 
+    public static void uploadPart(int account, String uploadId, int partNumber, byte[] bytes, String ticket, Callback callback) {
+        final String url = absoluteUrl(account, "/api/profiles/me/reels/uploads/" + android.net.Uri.encode(uploadId) + "/parts/" + partNumber);
+        if (url == null || bytes == null) {
+            callback.onResult(null, 0);
+            return;
+        }
+        AsyncTask.THREAD_POOL_EXECUTOR.execute(() -> {
+            HttpURLConnection connection = null;
+            String body = null;
+            int status = 0;
+            try {
+                connection = (HttpURLConnection) new URL(url).openConnection();
+                connection.setRequestMethod("PUT");
+                connection.setConnectTimeout(15000);
+                connection.setReadTimeout(60000);
+                connection.setDoOutput(true);
+                connection.setFixedLengthStreamingMode(bytes.length);
+                connection.setRequestProperty("Accept", "application/json");
+                connection.setRequestProperty("Content-Type", "application/octet-stream");
+                connection.setRequestProperty("Authorization", "Bearer " + ticket);
+                try (OutputStream out = connection.getOutputStream()) {
+                    out.write(bytes);
+                }
+                status = connection.getResponseCode();
+                InputStream stream = status >= 200 && status < 300 ? connection.getInputStream() : connection.getErrorStream();
+                if (stream != null) {
+                    StringBuilder result = new StringBuilder();
+                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+                        String line;
+                        while ((line = reader.readLine()) != null) result.append(line);
+                    }
+                    body = result.toString();
+                }
+            } catch (Exception ignore) {
+                // Never log a ticket or authorization material.
+            } finally {
+                if (connection != null) connection.disconnect();
+            }
+            final String responseBody = body;
+            final int responseCode = status;
+            AndroidUtilities.runOnUIThread(() -> callback.onResult(responseBody, responseCode));
+        });
+    }
+
     private static void requestNow(int account, String method, String path, JSONObject json, String bearerTicket, String telegramAuthorization, Callback callback) {
         final String url = absoluteUrl(account, path);
         if (url == null) {

@@ -23,19 +23,16 @@ import org.telegram.messenger.LocaleController;
 import org.telegram.messenger.MessagesController;
 import org.telegram.messenger.NotificationCenter;
 import org.telegram.messenger.R;
-import org.telegram.messenger.UserConfig;
-import org.telegram.messenger.Utilities;
 import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.ActionBar.Theme;
 import org.telegram.ui.Components.BackupImageView;
 import org.telegram.ui.Components.LayoutHelper;
-import org.telegram.ui.web.HttpGetTask;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 
-/** Public profile reels grid. The public endpoint provides metadata; media is always resolved via MTProto. */
+/** Public profile grid that preserves REST-owned and channel-backed Reel sources. */
 public final class ShortsProfileReelsView extends FrameLayout implements NotificationCenter.NotificationCenterDelegate {
 
     public interface Delegate {
@@ -65,6 +62,7 @@ public final class ShortsProfileReelsView extends FrameLayout implements Notific
     private boolean loading;
     private boolean failed;
     private boolean observingTheme;
+    private int requestGeneration;
 
     public ShortsProfileReelsView(Context context, int account, String username, boolean ownProfile, Delegate delegate) {
         super(context);
@@ -136,10 +134,12 @@ public final class ShortsProfileReelsView extends FrameLayout implements Notific
         if (url == null) { showError(); return; }
         loading = true;
         failed = false;
+        final int generation = requestGeneration;
         updateState();
-        new HttpGetTask(body -> {
+        ShortsBackendApi.request(account, "GET", endpointPath(nextOffset), null, null, false, (body, status) -> {
+            if (generation != requestGeneration) return;
             loading = false;
-            if (body == null) { showError(); return; }
+            if (body == null || status < 200 || status >= 300) { showError(); return; }
             try {
                 JSONObject response = new JSONObject(body);
                 JSONArray page = response.optJSONArray("items");
@@ -147,14 +147,21 @@ public final class ShortsProfileReelsView extends FrameLayout implements Notific
                 final int first = entries.size();
                 for (int i = 0; i < page.length(); i++) {
                     JSONObject object = page.optJSONObject(i);
-                    JSONObject channel = object != null ? object.optJSONObject("channel") : null;
-                    if (object == null || channel == null) continue;
+                    if (object == null) continue;
                     Entry entry = new Entry();
-                    entry.channelUsername = channel.optString("username", "");
                     entry.caption = object.optString("caption", "");
                     entry.shareUrl = object.optString("shareUrl", "");
-                    entry.messageId = object.optInt("messageId", 0);
-                    if (!ShortsRepository.isValidUsername(entry.channelUsername) || entry.messageId <= 0) continue;
+                    if ("profile".equals(object.optString("source", ""))) {
+                        entry.item = ShortsItem.fromProfile(account, object);
+                        if (entry.item == null) continue;
+                        if (!TextUtils.isEmpty(entry.shareUrl)) entry.item.publicShareUrl = entry.shareUrl;
+                    } else {
+                        JSONObject channel = object.optJSONObject("channel");
+                        entry.channelUsername = object.optString("channelUsername",
+                                channel != null ? channel.optString("username", "") : "");
+                        entry.messageId = object.optInt("messageId", object.optInt("message_id", 0));
+                        if (!ShortsRepository.isValidUsername(entry.channelUsername) || entry.messageId <= 0) continue;
+                    }
                     entries.add(entry);
                 }
                 int newOffset = response.isNull("nextOffset") ? -1 : response.optInt("nextOffset", -1);
@@ -162,13 +169,21 @@ public final class ShortsProfileReelsView extends FrameLayout implements Notific
                 if (!endReached) nextOffset = newOffset;
                 adapter.notifyItemRangeInserted(first, entries.size() - first);
                 updateState();
-                for (int i = first; i < entries.size(); i++) resolveEntry(entries.get(i), i);
+                for (int i = first; i < entries.size(); i++) {
+                    if (entries.get(i).item == null) resolveEntry(entries.get(i), i);
+                }
                 if (entries.isEmpty() && endReached) showEmpty();
                 else if (entries.isEmpty()) loadNextPage();
             } catch (Exception e) {
                 showError();
             }
-        }).executeOnExecutor(android.os.AsyncTask.THREAD_POOL_EXECUTOR, url);
+        });
+    }
+
+    private String endpointPath(int offset) {
+        final String url = endpoint(offset);
+        final String base = ShortsBackendApi.baseUrl(account);
+        return url != null && base != null ? url.substring(base.length()) : null;
     }
 
     private void resolveEntry(Entry entry, int position) {
@@ -188,6 +203,18 @@ public final class ShortsProfileReelsView extends FrameLayout implements Notific
         updateState();
     }
 
+    public void reload() {
+        requestGeneration++;
+        entries.clear();
+        nextOffset = 0;
+        endReached = false;
+        loading = false;
+        failed = false;
+        adapter.notifyDataSetChanged();
+        updateState();
+        loadNextPage();
+    }
+
     private void showError() {
         loading = false;
         failed = true;
@@ -196,10 +223,16 @@ public final class ShortsProfileReelsView extends FrameLayout implements Notific
 
     private void updateState() {
         final boolean empty = entries.isEmpty();
-        stateView.setVisibility((empty && !loading) || failed ? VISIBLE : GONE);
-        if ((empty && !loading) || failed) {
-            stateView.setText(failed ? R.string.ShortsLoadFailed : R.string.ShortsProfileEmpty);
-            stateView.setOnClickListener(failed ? v -> loadNextPage() : ownProfile ? v -> delegate.onUpload() : null);
+        stateView.setVisibility(empty || failed ? VISIBLE : GONE);
+        if (failed) {
+            stateView.setText(R.string.ShortsLoadFailed);
+            stateView.setOnClickListener(v -> loadNextPage());
+        } else if (empty && loading) {
+            stateView.setText(R.string.Loading);
+            stateView.setOnClickListener(null);
+        } else if (empty) {
+            stateView.setText(R.string.ShortsProfileEmpty);
+            stateView.setOnClickListener(ownProfile ? v -> delegate.onUpload() : null);
         } else {
             stateView.setOnClickListener(null);
         }
@@ -266,12 +299,18 @@ public final class ShortsProfileReelsView extends FrameLayout implements Notific
             caption.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText));
             caption.setBackgroundColor(Theme.multAlpha(Theme.getColor(Theme.key_windowBackgroundWhite), 0.82f));
             setBackgroundColor(Theme.getColor(Theme.key_windowBackgroundGray));
-            if (entry.item != null && !entry.item.document.thumbs.isEmpty()) {
+            if (entry.item != null && entry.item.source == ShortsItem.Source.PROFILE) {
+                if (!TextUtils.isEmpty(entry.item.thumbnailUrl)) {
+                    image.setImage(ImageLocation.getForPath(entry.item.thumbnailUrl), "320_320", null, null);
+                } else {
+                    image.clearImage();
+                }
+            } else if (entry.item != null && entry.item.document != null && !entry.item.document.thumbs.isEmpty()) {
                 TLRPC.PhotoSize thumb = FileLoader.getClosestPhotoSizeWithSize(entry.item.document.thumbs, 512);
                 if (thumb != null) image.setImage(ImageLocation.getForDocument(thumb, entry.item.document), null, (android.graphics.drawable.Drawable) null, entry.item.messageObject);
-                else image.setImageDrawable(null);
+                else image.clearImage();
             } else {
-                image.setImageDrawable(null);
+                image.clearImage();
             }
         }
     }

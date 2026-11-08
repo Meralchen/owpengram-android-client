@@ -1,7 +1,5 @@
 package org.telegram.ui.Components.Shorts;
 
-import static org.telegram.messenger.AndroidUtilities.dp;
-
 import android.annotation.SuppressLint;
 import android.content.Context;
 import android.view.MotionEvent;
@@ -15,27 +13,20 @@ import androidx.recyclerview.widget.PagerSnapHelper;
 import androidx.recyclerview.widget.RecyclerView;
 
 /**
- * Fullscreen horizontal snap pager. Swiping from right to left advances to the next clip.
+ * Fullscreen vertical snap pager. Horizontal gestures are left to the parent tab pager.
  * <p>
- * Axis arbitration: the axis is chosen once the touch passes touch slop and one axis dominates
- * the other by {@link #AXIS_DOMINANCE}. Only horizontal drags reach the RecyclerView; vertical
- * drags fire {@link Listener#onVerticalSwipe(boolean)} on release after {@link #VERTICAL_TRIGGER_DP}.
- * Children that call requestDisallowInterceptTouchEvent (buttons, timeline) keep the gesture.
+ * Axis arbitration keeps horizontal navigation separate from vertical clip paging. Controls that
+ * call requestDisallowInterceptTouchEvent keep their gesture.
  */
 public class ShortsViewPager extends RecyclerView {
 
     public static final float AXIS_DOMINANCE = 1.25f;
-    public static final int VERTICAL_TRIGGER_DP = 72;
-
     private static final int AXIS_NONE = 0;
-    private static final int AXIS_HORIZONTAL = 1;
-    private static final int AXIS_VERTICAL = 2;
+    private static final int AXIS_VERTICAL = 1;
+    private static final int AXIS_HORIZONTAL = 2;
 
     public interface Listener {
         void onPageSelected(int position);
-
-        /** Finger down opens the channel; finger up opens comments. */
-        void onVerticalSwipe(boolean fingerDown);
     }
 
     private final LinearLayoutManager layoutManager;
@@ -51,7 +42,7 @@ public class ShortsViewPager extends RecyclerView {
     public ShortsViewPager(@NonNull Context context) {
         super(context);
         touchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
-        layoutManager = new LinearLayoutManager(context, HORIZONTAL, false) {
+        layoutManager = new LinearLayoutManager(context, VERTICAL, false) {
             @Override
             public boolean supportsPredictiveItemAnimations() {
                 return false;
@@ -59,7 +50,7 @@ public class ShortsViewPager extends RecyclerView {
 
             @Override
             protected int getExtraLayoutSpace(State state) {
-                return getWidth();
+                return getHeight();
             }
         };
         setLayoutManager(layoutManager);
@@ -91,8 +82,8 @@ public class ShortsViewPager extends RecyclerView {
         }
         if (smooth && !ShortsActivity.isReducedMotion()) {
             final LinearSmoothScroller scroller = new LinearSmoothScroller(getContext()) {
-                @Override protected int calculateTimeForScrolling(int dx) { return 220; }
-                @Override protected int calculateTimeForDeceleration(int dx) { return 320; }
+                @Override protected int calculateTimeForScrolling(int dy) { return 220; }
+                @Override protected int calculateTimeForDeceleration(int dy) { return 320; }
             };
             scroller.setTargetPosition(position);
             layoutManager.startSmoothScroll(scroller);
@@ -165,12 +156,6 @@ public class ShortsViewPager extends RecyclerView {
         }
         final boolean result = super.dispatchTouchEvent(e);
         final int action = e.getActionMasked();
-        if (action == MotionEvent.ACTION_UP && axis == AXIS_VERTICAL && !childOwnsGesture) {
-            final float dy = e.getY() - downY;
-            if (Math.abs(dy) > dp(VERTICAL_TRIGGER_DP) && listener != null) {
-                listener.onVerticalSwipe(dy > 0);
-            }
-        }
         if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
             axis = AXIS_NONE;
         }
@@ -186,11 +171,15 @@ public class ShortsViewPager extends RecyclerView {
         if (Math.max(dx, dy) <= touchSlop) {
             return;
         }
-        if (dx > AXIS_DOMINANCE * dy) {
-            axis = AXIS_HORIZONTAL;
-        } else if (dy > AXIS_DOMINANCE * dx) {
+        if (dy > AXIS_DOMINANCE * dx) {
             axis = AXIS_VERTICAL;
+        } else if (dx > AXIS_DOMINANCE * dy) {
+            axis = AXIS_HORIZONTAL;
         }
+    }
+
+    public boolean isHorizontalGesture() {
+        return axis == AXIS_HORIZONTAL && !childOwnsGesture;
     }
 
     @Override
@@ -199,7 +188,7 @@ public class ShortsViewPager extends RecyclerView {
         if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
             return super.onInterceptTouchEvent(e);
         }
-        if (axis != AXIS_HORIZONTAL || childOwnsGesture) {
+        if (axis != AXIS_VERTICAL || childOwnsGesture) {
             return false;
         }
         return super.onInterceptTouchEvent(e);
@@ -208,7 +197,7 @@ public class ShortsViewPager extends RecyclerView {
     @SuppressLint("ClickableViewAccessibility")
     @Override
     public boolean onTouchEvent(MotionEvent e) {
-        if (e.getActionMasked() == MotionEvent.ACTION_MOVE && axis == AXIS_VERTICAL) {
+        if (e.getActionMasked() == MotionEvent.ACTION_MOVE && axis == AXIS_HORIZONTAL) {
             return true;
         }
         return super.onTouchEvent(e);

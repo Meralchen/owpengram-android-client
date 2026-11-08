@@ -16,17 +16,24 @@ import androidx.media3.exoplayer.source.ProgressiveMediaSource;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
 /**
- * Bounded pool: the current clip plus its two successors, never more than
+ * Bounded pool: the current clip and its immediate neighbors, never more than
  * {@link #MAX_PLAYERS} ExoPlayer instances. Keyed by adapter position.
  */
 @OptIn(markerClass = UnstableApi.class)
 public final class ShortsPlayerPool {
 
     public static final int MAX_PLAYERS = 3;
-    private static final int AHEAD = MAX_PLAYERS - 1;
+    private static final int AHEAD = 1;
+    private static final int BEHIND = 1;
+
+    public interface Listener {
+        void onPlayerReady();
+    }
 
     private static final class Entry {
         final ExoPlayer player;
@@ -40,16 +47,20 @@ public final class ShortsPlayerPool {
     }
 
     private final Context app;
+    private final Listener listener;
     private final Map<Integer, Entry> pool = new HashMap<>();
+    private final Set<String> pendingAuthorization = new HashSet<>();
     private int current = -1;
+    private int generation;
 
-    public ShortsPlayerPool(Context context) {
+    public ShortsPlayerPool(Context context, Listener listener) {
         app = context.getApplicationContext();
+        this.listener = listener;
     }
 
     /** Returns the prepared (paused) player for a clip, creating it if it is within the window. */
     public ExoPlayer acquire(int position, ShortsItem item) {
-        if (current >= 0 && (position < current || position > current + AHEAD)) {
+        if (current >= 0 && (position < current - BEHIND || position > current + AHEAD)) {
             return null;
         }
         Entry entry = pool.get(position);
@@ -58,6 +69,10 @@ public final class ShortsPlayerPool {
             entry = null;
         }
         if (entry == null) {
+            if (item.source == ShortsItem.Source.PROFILE && item.playbackAuthorizationHeader == null) {
+                prepareProfileAuthorization(position, item);
+                return null;
+            }
             final ExoPlayer player = create(item);
             if (player == null) {
                 return null;
@@ -74,7 +89,7 @@ public final class ShortsPlayerPool {
         return entry != null ? entry.player : null;
     }
 
-    /** Moves the window: pauses everything, drops players outside [current, current + 2]. */
+    /** Moves the window, pausing and releasing players outside the current clip's neighbors. */
     public void setCurrent(int position) {
         current = position;
         pauseAll();
@@ -116,6 +131,8 @@ public final class ShortsPlayerPool {
     }
 
     public void release() {
+        generation++;
+        pendingAuthorization.clear();
         for (Entry entry : pool.values()) {
             releaseEntry(entry);
         }
@@ -123,10 +140,36 @@ public final class ShortsPlayerPool {
         current = -1;
     }
 
+    private void prepareProfileAuthorization(int position, ShortsItem item) {
+        if (!pendingAuthorization.add(item.reelId)) {
+            return;
+        }
+        final int requestGeneration = generation;
+        ShortsBackendApi.authorizationHeader(item.account, header -> {
+            pendingAuthorization.remove(item.reelId);
+            if (header == null || requestGeneration != generation) {
+                return;
+            }
+            item.playbackAuthorizationHeader = header;
+            if (position < current - BEHIND || position > current + AHEAD || pool.containsKey(position)) {
+                return;
+            }
+            final ExoPlayer player = create(item);
+            if (player == null) {
+                return;
+            }
+            pool.put(position, new Entry(player, item));
+            trim();
+            if (listener != null) {
+                listener.onPlayerReady();
+            }
+        });
+    }
+
     private void trim() {
         final ArrayList<Integer> remove = new ArrayList<>();
         for (Integer position : pool.keySet()) {
-            if (current >= 0 && (position < current || position > current + AHEAD)) {
+            if (current >= 0 && (position < current - BEHIND || position > current + AHEAD)) {
                 remove.add(position);
             }
         }
@@ -160,7 +203,9 @@ public final class ShortsPlayerPool {
     }
 
     private ExoPlayer create(ShortsItem item) {
-        final Uri uri = item.mtprotoUri();
+        final Uri uri = item.source == ShortsItem.Source.PROFILE
+                ? (item.mediaUrl != null ? Uri.parse(item.mediaUrl) : null)
+                : item.mtprotoUri();
         if (uri == null) {
             return null;
         }

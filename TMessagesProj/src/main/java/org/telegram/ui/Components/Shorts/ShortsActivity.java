@@ -1,8 +1,7 @@
 package org.telegram.ui.Components.Shorts;
 
-import static org.telegram.messenger.AndroidUtilities.dp;
-
 import android.content.Context;
+import android.graphics.Color;
 import android.graphics.PorterDuff;
 import android.graphics.PorterDuffColorFilter;
 import android.os.Bundle;
@@ -14,6 +13,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
+import android.widget.PopupMenu;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
@@ -24,6 +24,7 @@ import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.ApplicationLoader;
 import org.telegram.messenger.LiteMode;
 import org.telegram.messenger.LocaleController;
+import org.telegram.messenger.MessagesController;
 import org.telegram.messenger.NotificationCenter;
 import org.telegram.messenger.R;
 import org.telegram.tgnet.TLRPC;
@@ -34,6 +35,7 @@ import org.telegram.ui.Components.BulletinFactory;
 import org.telegram.ui.Components.LayoutHelper;
 import org.telegram.ui.Components.RadialProgressView;
 import org.telegram.ui.Components.ShareAlert;
+import org.telegram.ui.MainTabsActivity;
 import org.telegram.ui.ProfileActivity;
 
 import java.util.ArrayList;
@@ -42,11 +44,10 @@ import java.util.HashSet;
 import java.util.List;
 
 /**
- * Clips screen: chronological feed of channel video messages in a horizontal pager.
- * Implemented as a BaseFragment like the rest of the fork; it keeps its own feed state and does
- * not share anything with the Stories viewer.
+ * Fullscreen, vertically snapping Reel feed. Channel messages and profile-owned REST Reels keep
+ * their own media and interaction pipelines and do not share the Stories viewer.
  */
-public class ShortsActivity extends BaseFragment implements NotificationCenter.NotificationCenterDelegate, ShortsCell.Delegate, ShortsViewPager.Listener {
+public class ShortsActivity extends BaseFragment implements NotificationCenter.NotificationCenterDelegate, ShortsCell.Delegate, ShortsViewPager.Listener, MainTabsActivity.TabFragmentDelegate {
 
     private final ShortsItem startItem;
     private ShortsRepository repository;
@@ -59,8 +60,12 @@ public class ShortsActivity extends BaseFragment implements NotificationCenter.N
     private TextView emptyView;
     private RadialProgressView progressView;
     private ImageView backButton;
+    private ImageView moreButton;
     private int currentPage = RecyclerView.NO_POSITION;
     private boolean paused = true;
+    private Runnable hideEndMessage;
+    private Runnable homeAction;
+    private Runnable exitAction;
 
     /** Opens the general chronological feed. */
     public ShortsActivity() {
@@ -80,14 +85,16 @@ public class ShortsActivity extends BaseFragment implements NotificationCenter.N
         return AndroidUtilities.getAnimatorDurationScale() == 0f || !LiteMode.isEnabled(LiteMode.FLAG_ANIMATED_EMOJI_CHAT);
     }
 
-    private static String key(long dialogId, int messageId) {
-        return dialogId + "_" + messageId;
+    private static String key(ShortsItem item) {
+        return item.source == ShortsItem.Source.PROFILE
+                ? "profile_" + item.reelId
+                : item.getDialogId() + "_" + item.messageId;
     }
 
     @Override
     public boolean onFragmentCreate() {
         repository = new ShortsRepository(currentAccount);
-        playerPool = new ShortsPlayerPool(ApplicationLoader.applicationContext);
+        playerPool = new ShortsPlayerPool(ApplicationLoader.applicationContext, this::refreshPlayers);
         getNotificationCenter().addObserver(this, NotificationCenter.didUpdateReactions);
         getNotificationCenter().addObserver(this, NotificationCenter.messagesDeleted);
         getNotificationCenter().addObserver(this, NotificationCenter.appDidLogout);
@@ -108,6 +115,10 @@ public class ShortsActivity extends BaseFragment implements NotificationCenter.N
         NotificationCenter.getGlobalInstance().removeObserver(this, NotificationCenter.didSetNewTheme);
         repository.cancel();
         releasePlayers();
+        if (exitAction != null) {
+            exitAction.run();
+            exitAction = null;
+        }
         super.onFragmentDestroy();
     }
 
@@ -133,7 +144,7 @@ public class ShortsActivity extends BaseFragment implements NotificationCenter.N
     @Override
     public View createView(Context context) {
         final FrameLayout root = new FrameLayout(context);
-        root.setBackgroundColor(getThemedColor(Theme.key_windowBackgroundWhite));
+        root.setBackgroundColor(Color.BLACK);
         root.setKeepScreenOn(true);
         fragmentView = root;
 
@@ -154,13 +165,43 @@ public class ShortsActivity extends BaseFragment implements NotificationCenter.N
         root.addView(emptyView, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, Gravity.CENTER, 32, 0, 32, 0));
 
         backButton = new ImageView(context);
-        backButton.setImageResource(R.drawable.ic_ab_back);
+        backButton.setImageResource(R.drawable.msg_home);
         backButton.setScaleType(ImageView.ScaleType.CENTER);
-        backButton.setColorFilter(new PorterDuffColorFilter(getThemedColor(Theme.key_windowBackgroundWhiteBlackText), PorterDuff.Mode.SRC_IN));
-        backButton.setBackground(Theme.createSelectorDrawable(Theme.multAlpha(getThemedColor(Theme.key_windowBackgroundWhiteBlueText4), 0.18f), 1));
-        backButton.setContentDescription(LocaleController.getString(R.string.AccDescrGoBack));
-        backButton.setOnClickListener(v -> finishFragment());
+        backButton.setColorFilter(new PorterDuffColorFilter(Color.WHITE, PorterDuff.Mode.SRC_IN));
+        backButton.setBackground(Theme.createSelectorDrawable(0x33FFFFFF, 1));
+        backButton.setContentDescription(LocaleController.getString(R.string.MainTabsChats));
+        backButton.setOnClickListener(v -> {
+            if (homeAction != null) homeAction.run();
+            else finishFragment();
+        });
         root.addView(backButton, LayoutHelper.createFrame(44, 44, Gravity.TOP | Gravity.LEFT, 6, AndroidUtilities.statusBarHeight / AndroidUtilities.density + 36, 0, 0));
+
+        moreButton = new ImageView(context);
+        moreButton.setImageResource(R.drawable.media_more);
+        moreButton.setScaleType(ImageView.ScaleType.CENTER);
+        moreButton.setColorFilter(new PorterDuffColorFilter(Color.WHITE, PorterDuff.Mode.SRC_IN));
+        moreButton.setBackground(Theme.createSelectorDrawable(0x33FFFFFF, 1));
+        moreButton.setContentDescription(LocaleController.getString(R.string.AccDescrMoreOptions));
+        moreButton.setOnClickListener(v -> {
+            final PopupMenu menu = new PopupMenu(context, moreButton);
+            menu.getMenu().add(0, 1, 0, LocaleController.getString(R.string.Refresh));
+            menu.setOnMenuItemClickListener(item -> {
+                if (item.getItemId() == 1) {
+                    repository.resetFeed();
+                    items.clear();
+                    itemKeys.clear();
+                    currentPage = RecyclerView.NO_POSITION;
+                    adapter.notifyDataSetChanged();
+                    emptyView.setText("");
+                    updateState();
+                    loadMore();
+                    return true;
+                }
+                return false;
+            });
+            menu.show();
+        });
+        root.addView(moreButton, LayoutHelper.createFrame(44, 44, Gravity.TOP | Gravity.RIGHT, 0, AndroidUtilities.statusBarHeight / AndroidUtilities.density + 36, 6, 0));
 
         updateState();
         updateThemeColors();
@@ -173,7 +214,7 @@ public class ShortsActivity extends BaseFragment implements NotificationCenter.N
     private void addItems(List<ShortsItem> page) {
         final int start = items.size();
         for (ShortsItem item : page) {
-            if (itemKeys.add(key(item.getDialogId(), item.messageId))) {
+            if (itemKeys.add(key(item))) {
                 items.add(item);
             }
         }
@@ -201,6 +242,7 @@ public class ShortsActivity extends BaseFragment implements NotificationCenter.N
                 emptyView.setOnClickListener(null);
             }
             updateState();
+            updateEndMessage();
             if (wasEmpty && !items.isEmpty() && pager != null) {
                 pager.setCurrentPage(0, false);
             } else if (error == null && !endReached && page.isEmpty()) {
@@ -265,17 +307,18 @@ public class ShortsActivity extends BaseFragment implements NotificationCenter.N
         currentPage = position;
         playerPool.setCurrent(position);
         refreshPlayers();
+        updateEndMessage();
         if (position >= items.size() - 3) {
             loadMore();
         }
     }
 
-    /** Binds pooled players to visible cells; preloads current + next two; plays only the current one. */
+    /** Prepares the current Reel and its immediate neighbors, playing only the current one. */
     private void refreshPlayers() {
         if (pager == null || currentPage == RecyclerView.NO_POSITION || items.isEmpty()) {
             return;
         }
-        for (int p = currentPage; p <= Math.min(items.size() - 1, currentPage + ShortsPlayerPool.MAX_PLAYERS - 1); p++) {
+        for (int p = Math.max(0, currentPage - 1); p <= Math.min(items.size() - 1, currentPage + 1); p++) {
             playerPool.acquire(p, items.get(p));
         }
         for (int i = 0; i < pager.getChildCount(); i++) {
@@ -328,12 +371,37 @@ public class ShortsActivity extends BaseFragment implements NotificationCenter.N
 
     @Override
     public boolean isLightStatusBar() {
-        return !Theme.isCurrentThemeDark();
+        return false;
     }
 
     @Override
     public int getNavigationBarColor() {
-        return getThemedColor(Theme.key_windowBackgroundWhite);
+        return Color.BLACK;
+    }
+
+    public void setHomeAction(Runnable action) {
+        homeAction = action;
+    }
+
+    public void setExitAction(Runnable action) {
+        exitAction = action;
+    }
+
+    private void updateEndMessage() {
+        if (hideEndMessage != null) {
+            AndroidUtilities.cancelRunOnUIThread(hideEndMessage);
+            hideEndMessage = null;
+        }
+        if (emptyView == null || !repository.isEndReached() || currentPage != items.size() - 1 || items.isEmpty()) return;
+        emptyView.setText(LocaleController.getString(R.string.ShortsNoMoreVideos));
+        emptyView.setOnClickListener(null);
+        emptyView.setClickable(false);
+        emptyView.setVisibility(View.VISIBLE);
+        hideEndMessage = () -> {
+            hideEndMessage = null;
+            if (emptyView != null && !items.isEmpty()) emptyView.setVisibility(View.GONE);
+        };
+        AndroidUtilities.runOnUIThread(hideEndMessage, 2200);
     }
 
     @Override
@@ -353,7 +421,7 @@ public class ShortsActivity extends BaseFragment implements NotificationCenter.N
             }
             final TLRPC.TL_messageReactions reactions = (TLRPC.TL_messageReactions) args[2];
             for (ShortsItem item : items) {
-                if (item.getDialogId() == dialogId && item.messageId == messageId) {
+                if (item.source == ShortsItem.Source.CHANNEL && item.getDialogId() == dialogId && item.messageId == messageId) {
                     // Optimistic state wins while our own request is still in flight.
                     if (!repository.hasPendingReaction(item)) {
                         item.applyReactions(reactions);
@@ -376,7 +444,7 @@ public class ShortsActivity extends BaseFragment implements NotificationCenter.N
                 final ShortsItem item = items.get(i);
                 if (item.channelId == channelId && ids.contains(item.messageId) && i != currentPage) {
                     items.remove(i);
-                    itemKeys.remove(key(item.getDialogId(), item.messageId));
+                    itemKeys.remove(key(item));
                     if (i < currentPage) {
                         currentPage--;
                     }
@@ -406,17 +474,19 @@ public class ShortsActivity extends BaseFragment implements NotificationCenter.N
 
     private void updateThemeColors() {
         if (fragmentView != null) {
-            fragmentView.setBackgroundColor(getThemedColor(Theme.key_windowBackgroundWhite));
+            fragmentView.setBackgroundColor(Color.BLACK);
         }
         if (progressView != null) {
-            progressView.setProgressColor(getThemedColor(Theme.key_windowBackgroundWhiteBlueText4));
+            progressView.setProgressColor(Color.WHITE);
         }
         if (emptyView != null) {
-            emptyView.setTextColor(getThemedColor(Theme.key_windowBackgroundWhiteGrayText));
+            emptyView.setTextColor(0xFFEFEFEF);
         }
         if (backButton != null) {
-            backButton.setColorFilter(new PorterDuffColorFilter(getThemedColor(Theme.key_windowBackgroundWhiteBlackText), PorterDuff.Mode.SRC_IN));
-            backButton.setBackground(Theme.createSelectorDrawable(Theme.multAlpha(getThemedColor(Theme.key_windowBackgroundWhiteBlueText4), 0.18f), 1));
+            backButton.setColorFilter(new PorterDuffColorFilter(Color.WHITE, PorterDuff.Mode.SRC_IN));
+        }
+        if (moreButton != null) {
+            moreButton.setColorFilter(new PorterDuffColorFilter(Color.WHITE, PorterDuff.Mode.SRC_IN));
         }
         if (pager != null) {
             for (int i = 0; i < pager.getChildCount(); i++) {
@@ -457,7 +527,9 @@ public class ShortsActivity extends BaseFragment implements NotificationCenter.N
         if (player != null) {
             player.pause();
         }
-        final ShortsCommentsSheet sheet = new ShortsCommentsSheet(getParentActivity(), repository, item);
+        final android.app.Dialog sheet = item.source == ShortsItem.Source.PROFILE
+                ? new ShortsProfileCommentsSheet(getParentActivity(), item)
+                : new ShortsCommentsSheet(getParentActivity(), repository, item);
         showDialog(sheet, dialog -> {
             final ShortsCell current = findCell(item);
             if (current != null) {
@@ -480,6 +552,10 @@ public class ShortsActivity extends BaseFragment implements NotificationCenter.N
             showDialog(ShareAlert.createShareAlert(getParentActivity(), null, item.publicShareUrl, false, item.publicShareUrl, false));
             return;
         }
+        if (item.source == ShortsItem.Source.PROFILE) {
+            BulletinFactory.of(this).createErrorBulletin(LocaleController.getString(R.string.ErrorOccurred)).show();
+            return;
+        }
         repository.exportLink(item, link -> {
             if (getParentActivity() == null) {
                 return;
@@ -496,6 +572,12 @@ public class ShortsActivity extends BaseFragment implements NotificationCenter.N
     public void onOpenChannel(ShortsCell cell) {
         final ShortsItem item = cell.getItem();
         if (item == null) {
+            return;
+        }
+        if (item.source == ShortsItem.Source.PROFILE) {
+            if (!TextUtils.isEmpty(item.creatorUsername)) {
+                MessagesController.getInstance(currentAccount).openByUserName(item.creatorUsername, this, 0);
+            }
             return;
         }
         final Bundle args = new Bundle();
@@ -537,16 +619,8 @@ public class ShortsActivity extends BaseFragment implements NotificationCenter.N
     }
 
     @Override
-    public void onVerticalSwipe(boolean fingerDown) {
-        final ShortsCell cell = findCell(currentPage);
-        if (cell == null) {
-            return;
-        }
-        if (fingerDown) {
-            onOpenChannel(cell);
-        } else {
-            onOpenComments(cell);
-        }
+    public boolean canParentTabsSlide(MotionEvent event, boolean forward) {
+        return pager != null && pager.isHorizontalGesture();
     }
 
     private class Adapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {

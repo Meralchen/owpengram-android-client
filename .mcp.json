@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "agent-device": {
+      "type": "local",
+      "command": "npx",
+      "args": ["-y", "agent-device@0.21.36", "mcp"]
+    }
+  }
+}

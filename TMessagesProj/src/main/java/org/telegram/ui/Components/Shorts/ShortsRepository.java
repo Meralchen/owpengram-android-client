@@ -1,6 +1,8 @@
 package org.telegram.ui.Components.Shorts;
 
 import android.util.SparseArray;
+import android.net.Uri;
+import android.text.TextUtils;
 
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.ChatObject;
@@ -11,13 +13,19 @@ import org.telegram.tgnet.ConnectionsManager;
 import org.telegram.tgnet.TLObject;
 import org.telegram.tgnet.TLRPC;
 
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.regex.Pattern;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 
 /**
- * Feed pages (messages.searchGlobal + inputMessagesFilterVideo), heart reactions
- * (messages.sendReaction) and discussions (getDiscussionMessage / getReplies),
- * all through the account's MTProto connection.
+ * The public feed and profile-Reel interactions use REST. Channel-backed items
+ * resolve to normal MTProto messages and keep their existing reaction/discussion RPCs.
  */
 public final class ShortsRepository {
 
@@ -57,12 +65,10 @@ public final class ShortsRepository {
 
     private final int account;
 
-    private int offsetRate;
-    private TLRPC.InputPeer offsetPeer = new TLRPC.TL_inputPeerEmpty();
-    private int offsetId;
+    private String nextCursor;
     private boolean loading;
     private boolean endReached;
-    private int feedRequestId;
+    private int requestGeneration;
 
     /** Clip -> desired liked state while a sendReaction for it is in flight. */
     private final SparseArray<Boolean> pendingLikes = new SparseArray<>();
@@ -84,11 +90,15 @@ public final class ShortsRepository {
         return endReached;
     }
 
-    /** Starts the chronological feed right after the linked clip, so it stays the current page. */
+    public void resetFeed() {
+        requestGeneration++;
+        nextCursor = null;
+        loading = false;
+        endReached = false;
+    }
+
+    /** A linked item is already inserted as page zero; REST feed pagination remains opaque. */
     public void startAfter(ShortsItem item) {
-        offsetRate = item.getMessage().date;
-        offsetPeer = controller().getInputPeer(item.getDialogId());
-        offsetId = item.messageId;
         endReached = false;
     }
 
@@ -97,42 +107,88 @@ public final class ShortsRepository {
             return;
         }
         loading = true;
-        final TLRPC.TL_messages_searchGlobal req = new TLRPC.TL_messages_searchGlobal();
-        req.q = "";
-        req.filter = new TLRPC.TL_inputMessagesFilterVideo();
-        req.limit = PAGE_SIZE;
-        req.offset_rate = offsetRate;
-        req.offset_peer = offsetPeer;
-        req.offset_id = offsetId;
-        feedRequestId = ConnectionsManager.getInstance(account).sendRequest(req, (response, error) -> AndroidUtilities.runOnUIThread(() -> {
-            loading = false;
-            feedRequestId = 0;
-            if (!(response instanceof TLRPC.messages_Messages)) {
-                callback.onPage(new ArrayList<>(), endReached, error);
+        final int generation = requestGeneration;
+        String path = "/api/reels/feed?limit=" + PAGE_SIZE;
+        if (nextCursor != null) {
+            try {
+                path += "&cursor=" + URLEncoder.encode(nextCursor, StandardCharsets.UTF_8.name());
+            } catch (Exception e) {
+                loading = false;
+                callback.onPage(new ArrayList<>(), endReached, restError(0, "Invalid feed cursor"));
                 return;
             }
-            final TLRPC.messages_Messages res = (TLRPC.messages_Messages) response;
-            controller().putUsers(res.users, false);
-            controller().putChats(res.chats, false);
-            final ArrayList<ShortsItem> items = new ArrayList<>();
-            for (int i = 0; i < res.messages.size(); i++) {
-                final ShortsItem item = ShortsItem.from(account, res.messages.get(i));
-                if (item != null) {
-                    item.pageRate = res.next_rate;
-                    items.add(item);
+        }
+        ShortsBackendApi.request(account, "GET", path, null, null, false, (body, status) -> {
+            if (generation != requestGeneration) return;
+            loading = false;
+            if (status < 200 || status >= 300 || body == null) {
+                callback.onPage(new ArrayList<>(), endReached, restError(status, "Feed request failed"));
+                return;
+            }
+            try {
+                final JSONObject response = new JSONObject(body);
+                final JSONArray values = response.optJSONArray("items");
+                if (values == null) {
+                    callback.onPage(new ArrayList<>(), endReached, restError(status, "Feed response has no items"));
+                    return;
                 }
+                nextCursor = response.isNull("nextCursor") ? null : response.optString("nextCursor", null);
+                endReached = nextCursor == null;
+                resolveFeedItems(values, generation, callback);
+            } catch (JSONException e) {
+                callback.onPage(new ArrayList<>(), endReached, restError(status, "Invalid feed response"));
             }
-            if (res.messages.isEmpty()) {
-                endReached = true;
-            } else {
-                final TLRPC.Message last = res.messages.get(res.messages.size() - 1);
-                offsetRate = res.next_rate != 0 ? res.next_rate : last.date;
-                offsetPeer = controller().getInputPeer(MessageObject.getPeerId(last.peer_id));
-                offsetId = last.id;
-                endReached = !(res instanceof TLRPC.TL_messages_messagesSlice);
+        });
+    }
+
+    private void resolveFeedItems(JSONArray values, int generation, FeedCallback callback) {
+        final ArrayList<ShortsItem> resolved = new ArrayList<>(Collections.nCopies(values.length(), null));
+        final int[] pending = {0};
+        for (int i = 0; i < values.length(); i++) {
+            final JSONObject value = values.optJSONObject(i);
+            if (value == null) continue;
+            final String source = value.optString("source", "");
+            if ("profile".equals(source)) {
+                resolved.set(i, ShortsItem.fromProfile(account, value));
+                continue;
             }
-            callback.onPage(items, endReached, null);
-        }));
+            if (!"channel".equals(source)) continue;
+            final JSONObject channel = value.optJSONObject("channel");
+            final String username = value.optString("channelUsername",
+                    channel != null ? channel.optString("username", "") : "");
+            final int messageId = value.optInt("messageId", value.optInt("message_id", 0));
+            if (!isValidUsername(username) || messageId <= 0) continue;
+            pending[0]++;
+            final int index = i;
+            resolveLink(account, username, messageId, (item, failure) -> {
+                if (item != null) {
+                    item.publicShareUrl = value.optString("shareUrl", "");
+                    resolved.set(index, item);
+                }
+                if (--pending[0] == 0) {
+                    finishResolvedFeed(resolved, generation, callback);
+                }
+            });
+        }
+        if (pending[0] == 0) {
+            finishResolvedFeed(resolved, generation, callback);
+        }
+    }
+
+    private void finishResolvedFeed(ArrayList<ShortsItem> resolved, int generation, FeedCallback callback) {
+        if (generation != requestGeneration) return;
+        final ArrayList<ShortsItem> items = new ArrayList<>();
+        for (ShortsItem item : resolved) {
+            if (item != null) items.add(item);
+        }
+        callback.onPage(items, endReached, null);
+    }
+
+    private static TLRPC.TL_error restError(int status, String message) {
+        final TLRPC.TL_error error = new TLRPC.TL_error();
+        error.code = status;
+        error.text = message;
+        return error;
     }
 
     /**
@@ -140,15 +196,52 @@ public final class ShortsRepository {
      * flight only update the desired state, which is sent once the previous request returns.
      */
     public void setLiked(ShortsItem item, boolean liked, ReactionCallback callback) {
+        if (item.source == ShortsItem.Source.PROFILE) {
+            setProfileLiked(item, liked, callback);
+            return;
+        }
         if (item.liked != liked) {
             item.liked = liked;
             item.likes = Math.max(0, item.likes + (liked ? 1 : -1));
         }
+
         if (inFlightLikes.get(item.messageId) != null) {
             pendingLikes.put(item.messageId, liked);
             return;
         }
         sendReaction(item, liked, callback);
+    }
+
+    private void setProfileLiked(ShortsItem item, boolean liked, ReactionCallback callback) {
+        final boolean previousLiked = item.liked;
+        final int previousCount = item.likes;
+        item.liked = liked;
+        item.likes = Math.max(0, previousCount + (liked == previousLiked ? 0 : liked ? 1 : -1));
+        final JSONObject body = new JSONObject();
+        try {
+            body.put("liked", liked);
+        } catch (JSONException e) {
+            item.liked = previousLiked;
+            item.likes = previousCount;
+            callback.onResult(item, restError(0, "Could not create like request"));
+            return;
+        }
+        final String path = "/api/reels/" + Uri.encode(item.reelId) + "/like";
+        ShortsBackendApi.request(account, "PUT", path, body, null, true, (response, status) -> {
+            if (status >= 200 && status < 300 && response != null) {
+                try {
+                    final JSONObject result = new JSONObject(response);
+                    item.liked = result.optBoolean("liked", liked);
+                    item.likes = result.optInt("likes", result.optInt("likeCount", result.optInt("count", item.likes)));
+                    callback.onResult(item, null);
+                    return;
+                } catch (JSONException ignored) {
+                }
+            }
+            item.liked = previousLiked;
+            item.likes = previousCount;
+            callback.onResult(item, restError(status, "Could not update Reel like"));
+        });
     }
 
     private void sendReaction(ShortsItem item, boolean liked, ReactionCallback callback) {
@@ -190,7 +283,7 @@ public final class ShortsRepository {
     }
 
     public boolean hasPendingReaction(ShortsItem item) {
-        return inFlightLikes.get(item.messageId) != null;
+        return item.source == ShortsItem.Source.CHANNEL && inFlightLikes.get(item.messageId) != null;
     }
 
     public void loadDiscussion(ShortsItem item, DiscussionCallback callback) {
@@ -269,6 +362,10 @@ public final class ShortsRepository {
     }
 
     public void exportLink(ShortsItem item, Utilities.Callback<String> callback) {
+        if (item.source != ShortsItem.Source.CHANNEL) {
+            callback.run(null);
+            return;
+        }
         final TLRPC.TL_channels_exportMessageLink req = new TLRPC.TL_channels_exportMessageLink();
         req.channel = controller().getInputChannel(item.channelId);
         req.id = item.messageId;
@@ -277,11 +374,8 @@ public final class ShortsRepository {
     }
 
     public void cancel() {
-        if (feedRequestId != 0) {
-            ConnectionsManager.getInstance(account).cancelRequest(feedRequestId, true);
-            feedRequestId = 0;
-            loading = false;
-        }
+        requestGeneration++;
+        loading = false;
     }
 
     public static boolean isValidUsername(String username) {

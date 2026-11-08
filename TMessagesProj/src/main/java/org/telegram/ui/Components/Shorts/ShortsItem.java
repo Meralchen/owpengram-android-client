@@ -31,6 +31,7 @@ public final class ShortsItem {
     public String thumbnailUrl;
     public String creatorName;
     public String creatorUsername;
+    public String playbackAuthorizationHeader;
     private String profileCaption;
     private double profileDuration;
     private int profileWidth;
@@ -95,15 +96,19 @@ public final class ShortsItem {
         item.profileDuration = object.optDouble("duration", 0);
         item.profileWidth = object.optInt("width", 0);
         item.profileHeight = object.optInt("height", 0);
-        item.likes = object.optInt("likes", 0);
-        item.comments = object.optInt("comments", 0);
-        item.views = object.optInt("views", 0);
+        item.likes = object.optInt("likes", object.optInt("likeCount", 0));
+        item.comments = object.optInt("comments", object.optInt("commentCount", 0));
+        item.views = object.optInt("views", object.optInt("viewCount", 0));
         item.liked = object.optBoolean("liked", false);
         JSONObject owner = object.optJSONObject("owner");
+        if (owner == null) owner = object.optJSONObject("creator");
+        if (owner == null) owner = object.optJSONObject("profile");
         if (owner != null) {
-            item.creatorName = owner.optString("displayName", owner.optString("name", ""));
+            item.creatorName = owner.optString("displayName", owner.optString("name", owner.optString("title", "")));
             item.creatorUsername = owner.optString("username", "");
         }
+        if (TextUtils.isEmpty(item.creatorName)) item.creatorName = object.optString("creatorName", "");
+        if (TextUtils.isEmpty(item.creatorUsername)) item.creatorUsername = object.optString("creatorUsername", "");
         item.publicShareUrl = object.optString("shareUrl", "");
         return item.mediaUrl != null ? item : null;
     }

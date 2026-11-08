@@ -11654,8 +11654,8 @@
     <string name="NoPaidMessagesTokenImported">You can now message **%1$s** for free.</string>
     <string name="ShortsTitle">Reels</string>
     <string name="ProfilePosts">Posts</string>
-    <string name="ProfileArchived">Archived</string>
-    <string name="ShortsEmpty">No channel videos yet. Shorts are made from regular video posts in channels.</string>
+    <string name="ShortsEmpty">No Reels yet.</string>
+    <string name="ShortsNoMoreVideos">You’re all caught up. No more new Reels.</string>
     <string name="ShortsLoadFailed">Couldn’t load videos. Tap to try again.</string>
     <string name="ShortsShare">Share</string>
     <string name="ShortsComments">Comments</string>
@@ -11676,11 +11676,16 @@
     <string name="ShortsNotFound">Reel not found.</string>
     <string name="ShortsProfileEmpty">No reels yet.</string>
     <string name="ShortsUploadReel">+ Reel</string>
+    <string name="ShortsUploadCaption">Add a caption</string>
+    <string name="ShortsUploadPreparing">Preparing video…</string>
+    <string name="ShortsUploadProgress">Uploading %1$d%%</string>
+    <string name="ShortsUploadFinishing">Publishing Reel…</string>
+    <string name="ShortsUploadFailed">Upload failed. Tap Retry to continue.</string>
+    <string name="ShortsUploadInvalid">Choose a supported video under 500 MiB and 10 minutes.</string>
     <string name="MainTabsCustomize">Customize bottom bar</string>
     <string name="MainTabsShowHide">Show or hide tabs</string>
     <string name="MainTabsReorder">Reorder tabs</string>
     <string name="MainTabsMoveEarlier">Move earlier</string>
     <string name="MainTabsMoveLater">Move later</string>
     <string name="MainTabsProfileRequired">Profile (always on)</string>
-    <string name="ShortsChoosePublicChannel">Choose a public channel where you can post.</string>
 </resources>

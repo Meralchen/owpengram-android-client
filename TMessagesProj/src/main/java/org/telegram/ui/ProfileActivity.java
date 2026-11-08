@@ -376,6 +376,7 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
     private UndoView undoView;
     private OverlaysView overlaysView;
     public SharedMediaLayout sharedMediaLayout;
+    private MainTabsActivityController mainTabsActivityController;
     private StickerEmptyView emptyView;
     private boolean sharedMediaLayoutAttached;
     private SharedMediaLayout.SharedMediaPreloader sharedMediaPreloader;
@@ -2095,6 +2096,16 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
         }
 
         scrimBlur3Factory.setLinkedViewsRef(new ReferenceList<>());
+    }
+
+    public void setMainTabsActivityController(MainTabsActivityController controller) {
+        mainTabsActivityController = controller;
+    }
+
+    public void setReelsViewerActive(boolean active) {
+        if (mainTabsActivityController != null) {
+            mainTabsActivityController.setReelsViewerActive(active);
+        }
     }
 
     @Override
@@ -13020,6 +13031,12 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
 
     @Override
     public void onActivityResultFragment(int requestCode, int resultCode, Intent data) {
+        if (requestCode == SharedMediaLayout.REQUEST_PROFILE_REEL) {
+            if (resultCode == android.app.Activity.RESULT_OK && data != null && sharedMediaLayout != null) {
+                sharedMediaLayout.onProfileReelPicked(data.getData());
+            }
+            return;
+        }
         if (imageUpdater != null) {
             imageUpdater.onActivityResult(requestCode, resultCode, data);
         }
