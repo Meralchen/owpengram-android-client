@@ -17,6 +17,9 @@
     <string name="ChooseCountry">Choose a country</string>
     <string name="WrongCountry">Invalid country code</string>
     <string name="AccountAlreadyLoggedIn">This account is already logged in from this app.</string>
+    <string name="UsernameLogin">Log in with username</string>
+    <string name="UsernameLoginPhoneFallback">Log in with phone number instead</string>
+    <string name="UsernameLoginError">Login failed. Check your username and password, or try logging in with your phone number.</string>
     <string name="AccountSwitch">Switch</string>
     <string name="SyncContacts">Sync Contacts</string>
     <string name="SyncContactsOn">Contacts from this device will be added to this account.</string>
@@ -11650,6 +11653,8 @@
     <string name="NoPaidMessagesTokenUsedOut">You used the QR code of un1 and can message them for free</string>
     <string name="NoPaidMessagesTokenImported">You can now message **%1$s** for free.</string>
     <string name="ShortsTitle">Reels</string>
+    <string name="ProfilePosts">Posts</string>
+    <string name="ProfileArchived">Archived</string>
     <string name="ShortsEmpty">No channel videos yet. Shorts are made from regular video posts in channels.</string>
     <string name="ShortsLoadFailed">Couldn’t load videos. Tap to try again.</string>
     <string name="ShortsShare">Share</string>
@@ -11668,4 +11673,14 @@
     <string name="ShortsActionPrevious">Previous clip</string>
     <string name="ShortsAccDescr">Video from %1$s. %2$s. Duration %3$s</string>
     <string name="ShortsNotAVideo">This link doesn\'t point to a channel video.</string>
+    <string name="ShortsNotFound">Reel not found.</string>
+    <string name="ShortsProfileEmpty">No reels yet.</string>
+    <string name="ShortsUploadReel">+ Reel</string>
+    <string name="MainTabsCustomize">Customize bottom bar</string>
+    <string name="MainTabsShowHide">Show or hide tabs</string>
+    <string name="MainTabsReorder">Reorder tabs</string>
+    <string name="MainTabsMoveEarlier">Move earlier</string>
+    <string name="MainTabsMoveLater">Move later</string>
+    <string name="MainTabsProfileRequired">Profile (always on)</string>
+    <string name="ShortsChoosePublicChannel">Choose a public channel where you can post.</string>
 </resources>

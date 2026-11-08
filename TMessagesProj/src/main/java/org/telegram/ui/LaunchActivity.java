@@ -1371,8 +1371,7 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
             final BaseFragment lastFragment = getLastFragment();
             if (item == null) {
                 if (lastFragment != null) {
-                    final int text = failure == ShortsRepository.LinkCallback.NO_ACCESS ? R.string.ChannelCantOpenPrivate : R.string.MessageNotFound;
-                    BulletinFactory.of(lastFragment).createErrorBulletin(LocaleController.getString(text)).show();
+                    BulletinFactory.of(lastFragment).createErrorBulletin(LocaleController.getString(R.string.ShortsNotFound)).show();
                 }
                 return;
             }

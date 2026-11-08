@@ -8167,6 +8167,8 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
             mediaCounterTextView.setText(LocaleController.formatPluralString("SavedMessagesCount", Math.max(1, messagesCount)));
         } else if (id == SharedMediaLayout.TAB_GIFTS) {
             mediaCounterTextView.setText(LocaleController.formatPluralStringComma("ProfileGiftsCount", sharedMediaLayout.giftsContainer == null ? 0 : sharedMediaLayout.giftsContainer.getGiftsCount()));
+        } else if (id == SharedMediaLayout.TAB_REELS) {
+            mediaCounterTextView.setText(LocaleController.getString(R.string.ShortsTitle));
         } else if (id == SharedMediaLayout.TAB_POLL) {
             if (mediaCount[MediaDataController.MEDIA_POLL] <= 0) {
                 mediaCounterTextView.setText(LocaleController.getString(R.string.SharedPollTab));

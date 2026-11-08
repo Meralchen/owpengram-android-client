@@ -86,6 +86,8 @@ public class ShortsCell extends FrameLayout {
     private final TextView subtitleView;
     private final LinearLayout channelRow;
     private final TextView captionView;
+    private final View topShade;
+    private final View bottomShade;
     private final ActionButton likeButton;
     private final ActionButton commentsButton;
     private final ActionButton shareButton;
@@ -151,7 +153,7 @@ public class ShortsCell extends FrameLayout {
     public ShortsCell(Context context, Delegate delegate) {
         super(context);
         this.delegate = delegate;
-        setBackgroundColor(Color.BLACK);
+        setBackgroundColor(Theme.getColor(Theme.key_windowBackgroundWhite));
 
         thumbView = new BackupImageView(context);
         addView(thumbView);
@@ -159,7 +161,7 @@ public class ShortsCell extends FrameLayout {
         addView(videoView);
 
         progressView = new RadialProgressView(context);
-        progressView.setProgressColor(Color.WHITE);
+        progressView.setProgressColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlueText4));
         progressView.setSize(dp(42));
         progressView.setVisibility(GONE);
         addView(progressView, LayoutHelper.createFrame(56, 56, Gravity.CENTER));
@@ -167,8 +169,8 @@ public class ShortsCell extends FrameLayout {
         playIcon = new ImageView(context);
         playIcon.setImageResource(R.drawable.play_mini_video);
         playIcon.setScaleType(ImageView.ScaleType.CENTER);
-        playIcon.setColorFilter(new PorterDuffColorFilter(Color.WHITE, PorterDuff.Mode.SRC_IN));
-        playIcon.setBackground(circle(0x66000000));
+        playIcon.setColorFilter(new PorterDuffColorFilter(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText), PorterDuff.Mode.SRC_IN));
+        playIcon.setBackground(circle(Theme.multAlpha(Theme.getColor(Theme.key_windowBackgroundWhite), 0.88f)));
         playIcon.setScaleX(1.6f);
         playIcon.setScaleY(1.6f);
         playIcon.setVisibility(GONE);
@@ -186,11 +188,9 @@ public class ShortsCell extends FrameLayout {
         heartView.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
         addView(heartView, LayoutHelper.createFrame(96, 96, Gravity.CENTER));
 
-        final View topShade = new View(context);
-        topShade.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{0x99000000, 0}));
+        topShade = new View(context);
         addView(topShade, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 140, Gravity.TOP));
-        final View bottomShade = new View(context);
-        bottomShade.setBackground(new GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, new int[]{0xb3000000, 0}));
+        bottomShade = new View(context);
         addView(bottomShade, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 220, Gravity.BOTTOM));
 
         final LinearLayout top = new LinearLayout(context);
@@ -270,6 +270,7 @@ public class ShortsCell extends FrameLayout {
                 return true;
             }
         });
+        updateThemeColors();
     }
 
     private static GradientDrawable circle(int color) {
@@ -281,15 +282,35 @@ public class ShortsCell extends FrameLayout {
 
     private static TextView text(Context context, int sizeDp, boolean bold) {
         final TextView view = new TextView(context);
-        view.setTextColor(Color.WHITE);
+        view.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText));
         view.setTextSize(TypedValue.COMPLEX_UNIT_DIP, sizeDp);
         view.setSingleLine(bold);
         view.setEllipsize(TextUtils.TruncateAt.END);
-        view.setShadowLayer(dp(2), 0, dp(1), 0x66000000);
+        view.setShadowLayer(dp(2), 0, dp(1), Theme.multAlpha(Theme.getColor(Theme.key_windowBackgroundWhite), 0.7f));
         if (bold) {
             view.setTypeface(AndroidUtilities.bold());
         }
         return view;
+    }
+
+    public void updateThemeColors() {
+        final int surface = Theme.getColor(Theme.key_windowBackgroundWhite);
+        final int text = Theme.getColor(Theme.key_windowBackgroundWhiteBlackText);
+        final int accent = Theme.getColor(Theme.key_windowBackgroundWhiteBlueText4);
+        setBackgroundColor(surface);
+        progressView.setProgressColor(accent);
+        playIcon.setColorFilter(new PorterDuffColorFilter(text, PorterDuff.Mode.SRC_IN));
+        playIcon.setBackground(circle(Theme.multAlpha(surface, 0.88f)));
+        topShade.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{Theme.multAlpha(surface, 0.94f), Theme.multAlpha(surface, 0.5f), 0}));
+        bottomShade.setBackground(new GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, new int[]{Theme.multAlpha(surface, 0.96f), Theme.multAlpha(surface, 0.52f), 0}));
+        titleView.setTextColor(text);
+        subtitleView.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteGrayText));
+        captionView.setTextColor(text);
+        timelineView.updateThemeColors(text, accent);
+        for (ActionButton button : new ActionButton[]{likeButton, commentsButton, shareButton, viewsButton}) {
+            button.updateThemeColors(text, accent);
+        }
+        updateCounters();
     }
 
     /** Controls keep the gesture: the pager neither pages nor fires vertical actions. */
@@ -381,7 +402,7 @@ public class ShortsCell extends FrameLayout {
         if (item == null) {
             return;
         }
-        likeButton.setIcon(item.liked ? R.drawable.media_like_active : R.drawable.media_like, item.liked ? 0xFFFF2D55 : Color.WHITE);
+        likeButton.setIcon(item.liked ? R.drawable.media_like_active : R.drawable.media_like, item.liked ? Theme.getColor(Theme.key_text_RedBold) : Theme.getColor(Theme.key_windowBackgroundWhiteBlackText));
         likeButton.setCount(item.likes);
         likeButton.setContentDescription(LocaleController.formatString(item.liked ? R.string.ShortsUnlike : R.string.ShortsLike, item.likes));
         commentsButton.setCount(item.comments);
@@ -558,7 +579,7 @@ public class ShortsCell extends FrameLayout {
             super(context);
             setOrientation(HORIZONTAL);
             setGravity(Gravity.CENTER);
-            setBackground(org.telegram.ui.ActionBar.Theme.createSelectorDrawable(0x33ffffff, 2));
+            setBackground(Theme.createSelectorDrawable(Theme.multAlpha(Theme.getColor(Theme.key_windowBackgroundWhiteBlueText4), 0.16f), 2));
             icon = new ImageView(context);
             icon.setScaleType(ImageView.ScaleType.CENTER);
             icon.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
@@ -566,13 +587,21 @@ public class ShortsCell extends FrameLayout {
             count = text(context, 14, true);
             count.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
             addView(count, LayoutHelper.createLinear(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT, 6, 0, 0, 0));
-            setIcon(iconRes, Color.WHITE);
+            setIcon(iconRes, Theme.getColor(Theme.key_windowBackgroundWhiteBlackText));
             priorityTouch(this);
         }
 
         void setIcon(int res, int color) {
             icon.setImageResource(res);
             icon.setColorFilter(new PorterDuffColorFilter(color, PorterDuff.Mode.SRC_IN));
+        }
+
+        void updateThemeColors(int textColor, int accentColor) {
+            count.setTextColor(textColor);
+            setBackground(Theme.createSelectorDrawable(Theme.multAlpha(accentColor, 0.16f), 2));
+            if (icon.getDrawable() != null) {
+                icon.setColorFilter(new PorterDuffColorFilter(textColor, PorterDuff.Mode.SRC_IN));
+            }
         }
 
         void setCount(int value) {
@@ -591,11 +620,18 @@ public class ShortsCell extends FrameLayout {
 
         TimelineView(Context context) {
             super(context);
-            textPaint.setColor(Color.WHITE);
+            textPaint.setColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText));
             textPaint.setTextSize(dp(12));
             textPaint.setTypeface(AndroidUtilities.bold());
-            textPaint.setShadowLayer(dp(2), 0, dp(1), 0x66000000);
+            textPaint.setShadowLayer(dp(2), 0, dp(1), Theme.multAlpha(Theme.getColor(Theme.key_windowBackgroundWhite), 0.7f));
             setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
+        }
+
+        void updateThemeColors(int textColor, int accentColor) {
+            textPaint.setColor(textColor);
+            textPaint.setShadowLayer(dp(2), 0, dp(1), Theme.multAlpha(Theme.getColor(Theme.key_windowBackgroundWhite), 0.7f));
+            barPaint.setColor(Theme.multAlpha(textColor, 0.24f));
+            invalidate();
         }
 
         void setProgress(long progress, long duration) {
@@ -626,11 +662,11 @@ public class ShortsCell extends FrameLayout {
             for (int i = 0; i < count; i++) {
                 final float sl = left + i * (segWidth + gap), sr = sl + segWidth;
                 rect.set(sl, barTop, sr, barBottom);
-                barPaint.setColor(0x55ffffff);
+                barPaint.setColor(Theme.multAlpha(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText), 0.24f));
                 canvas.drawRoundRect(rect, dp(2), dp(2), barPaint);
                 if (filledX > sl) {
                     rect.set(sl, barTop, Math.min(sr, filledX), barBottom);
-                    barPaint.setColor(Color.WHITE);
+                    barPaint.setColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlueText4));
                     canvas.drawRoundRect(rect, dp(2), dp(2), barPaint);
                 }
             }

@@ -2004,6 +2004,7 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
         private OutlineTextContainerView emailOutlineView;
         private EditTextBoldCursor emailField;
         private TextView titleView;
+        private TextView usernameLoginView;
         private TextView subtitleView;
         private TextView phoneFallbackView;
         private boolean nextPressed;
@@ -2030,14 +2031,13 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
             addView(subtitleView, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL, 32, 8, 32, 0));
 
             if (activityMode == MODE_LOGIN) {
-                TextView usernameLogin = new TextView(context);
-                usernameLogin.setText("Mit Username anmelden");
-                usernameLogin.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 14);
-                usernameLogin.setGravity(Gravity.CENTER);
-                usernameLogin.setPadding(dp(16), dp(10), dp(16), dp(10));
-                usernameLogin.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlueText4));
-                usernameLogin.setOnClickListener(v -> setPage(VIEW_USERNAME_LOGIN, true, null, false));
-                addView(usernameLogin, LayoutHelper.createLinear(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL, 0, 4, 0, 0));
+                usernameLoginView = new TextView(context);
+                usernameLoginView.setText(getString(R.string.UsernameLogin));
+                usernameLoginView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 14);
+                usernameLoginView.setGravity(Gravity.CENTER);
+                usernameLoginView.setPadding(dp(16), dp(10), dp(16), dp(10));
+                usernameLoginView.setOnClickListener(v -> setPage(VIEW_USERNAME_LOGIN, true, null, false));
+                addView(usernameLoginView, LayoutHelper.createLinear(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL, 0, 4, 0, 0));
             }
 
             emailOutlineView = new OutlineTextContainerView(context);
@@ -2093,6 +2093,7 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
             titleView.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText));
             subtitleView.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteGrayText6));
             emailField.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText));
+            if (usernameLoginView != null) usernameLoginView.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlueText4));
             phoneFallbackView.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlueText4));
             emailOutlineView.invalidate();
         }
@@ -2172,21 +2173,23 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
     public class UsernameLoginView extends SlideView {
         private final EditTextBoldCursor usernameField;
         private final OutlineTextContainerView usernameOutline;
+        private final TextView titleView;
+        private final TextView phoneFallbackView;
         private boolean nextPressed;
 
         public UsernameLoginView(Context context) {
             super(context);
             setOrientation(VERTICAL);
             setGravity(Gravity.CENTER);
-            TextView title = new TextView(context);
-            title.setText("Mit Username anmelden");
-            title.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 18);
-            title.setTypeface(AndroidUtilities.bold());
-            title.setGravity(Gravity.CENTER);
-            addView(title, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL, 24, 0, 24, 0));
+            titleView = new TextView(context);
+            titleView.setText(getString(R.string.UsernameLogin));
+            titleView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 18);
+            titleView.setTypeface(AndroidUtilities.bold());
+            titleView.setGravity(Gravity.CENTER);
+            addView(titleView, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL, 24, 0, 24, 0));
 
             usernameOutline = new OutlineTextContainerView(context);
-            usernameOutline.setText("Username");
+            usernameOutline.setText(getString(R.string.Username));
             usernameField = new EditTextBoldCursor(context);
             usernameField.setSingleLine(true);
             usernameField.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 17);
@@ -2199,14 +2202,13 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
             addView(usernameOutline, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 58, 16, 24, 16, 8));
 
             usernameField.setOnEditorActionListener((v, action, event) -> { if (action == EditorInfo.IME_ACTION_NEXT || action == EditorInfo.IME_ACTION_DONE) { onNextPressed(null); return true; } return false; });
-            TextView phoneFallback = new TextView(context);
-            phoneFallback.setText("Stattdessen mit Telefonnummer anmelden");
-            phoneFallback.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 14);
-            phoneFallback.setGravity(Gravity.CENTER);
-            phoneFallback.setPadding(dp(16), dp(16), dp(16), dp(16));
-            phoneFallback.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlueText4));
-            phoneFallback.setOnClickListener(v -> setPage(VIEW_PHONE_INPUT, true, null, true));
-            addView(phoneFallback, LayoutHelper.createLinear(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL));
+            phoneFallbackView = new TextView(context);
+            phoneFallbackView.setText(getString(R.string.UsernameLoginPhoneFallback));
+            phoneFallbackView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 14);
+            phoneFallbackView.setGravity(Gravity.CENTER);
+            phoneFallbackView.setPadding(dp(16), dp(16), dp(16), dp(16));
+            phoneFallbackView.setOnClickListener(v -> setPage(VIEW_PHONE_INPUT, true, null, true));
+            addView(phoneFallbackView, LayoutHelper.createLinear(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL));
         }
 
         @Override public void onNextPressed(String code) {
@@ -2256,18 +2258,28 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
         }
 
         private void showGenericError() {
-            if (getParentActivity() != null) needShowAlert(getString(R.string.RestorePasswordNoEmailTitle), "Anmeldung nicht möglich. Prüfe Username und Passwort oder melde dich mit Telefonnummer an.");
+            if (getParentActivity() != null) needShowAlert(getString(R.string.RestorePasswordNoEmailTitle), getString(R.string.UsernameLoginError));
         }
 
         @Override public boolean needBackButton() { return true; }
         @Override public void onShow() { super.onShow(); usernameField.requestFocus(); showKeyboard(usernameField); }
-        @Override public String getHeaderName() { return "Username"; }
+        @Override public String getHeaderName() { return getString(R.string.Username); }
+
+        @Override
+        public void updateColors() {
+            titleView.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText));
+            usernameField.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText));
+            usernameField.setHintTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteHintText));
+            phoneFallbackView.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlueText4));
+            usernameOutline.invalidate();
+        }
     }
 
     public class PhoneView extends SlideView implements AdapterView.OnItemSelectedListener, NotificationCenter.NotificationCenterDelegate {
         private AnimatedPhoneNumberEditText codeField;
         private AnimatedPhoneNumberEditText phoneField;
         private TextView titleView;
+        private TextView usernameLoginView;
         private TextViewSwitcher countryButton;
         private OutlineTextContainerView countryOutlineView;
         private OutlineTextContainerView phoneOutlineView;
@@ -2366,7 +2378,7 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
 
             if (activityMode == MODE_LOGIN) {
                 TextView usernameLogin = new TextView(context);
-                usernameLogin.setText("Mit Username anmelden");
+                usernameLogin.setText(getString(R.string.UsernameLogin));
                 usernameLogin.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 14);
                 usernameLogin.setGravity(Gravity.CENTER);
                 usernameLogin.setPadding(dp(16), dp(10), dp(16), dp(10));
@@ -3001,6 +3013,7 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
             titleView.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText));
             subtitleView.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteGrayText6));
             subtitleView.setLinkTextColor(Theme.getColor(Theme.key_chat_messageLinkIn));
+            if (usernameLoginView != null) usernameLoginView.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlueText4));
             for (int i = 0; i < countryButton.getChildCount(); i++) {
                 TextView textView = (TextView) countryButton.getChildAt(i);
                 textView.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText));
@@ -3388,7 +3401,7 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
                             final int num = a;
                             AlertDialog.Builder builder = new AlertDialog.Builder(getParentActivity());
                             builder.setTitle(getString(R.string.AppName));
-                            builder.setMessage(getString("AccountAlreadyLoggedIn", R.string.AccountAlreadyLoggedIn));
+                            builder.setMessage("This account is already logged in from this app.");
                             builder.setPositiveButton(getString("AccountSwitch", R.string.AccountSwitch), (dialog, which) -> {
                                 if (UserConfig.selectedAccount != num) {
                                     ((LaunchActivity) getParentActivity()).switchToAccount(num, true);
@@ -5938,7 +5951,7 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
                                     }
                                 }), ConnectionsManager.RequestFlagWithoutLogin);
                                 if (getParentActivity() != null) {
-                                    needShowAlert(getString(R.string.RestorePasswordNoEmailTitle), "Anmeldung nicht möglich. Prüfe Username und Passwort oder melde dich mit Telefonnummer an.");
+                                    needShowAlert(getString(R.string.RestorePasswordNoEmailTitle), getString(R.string.UsernameLoginError));
                                 }
                             }
                         } else if (error.text.startsWith("FLOOD_WAIT")) {

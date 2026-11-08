@@ -136,6 +136,9 @@ import org.telegram.ui.ChatActivity;
 import org.telegram.ui.ChatActivityContainer;
 import org.telegram.ui.Components.Forum.ForumUtilities;
 import org.telegram.ui.Components.Premium.LimitReachedBottomSheet;
+import org.telegram.ui.Components.Shorts.ShortsActivity;
+import org.telegram.ui.Components.Shorts.ShortsItem;
+import org.telegram.ui.Components.Shorts.ShortsProfileReelsView;
 import org.telegram.ui.Components.Reactions.ReactionsLayoutInBubble;
 import org.telegram.ui.Components.blur3.BlurredBackgroundDrawableViewFactory;
 import org.telegram.ui.Components.blur3.ViewGroupPartRenderer;
@@ -186,6 +189,7 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
     public static final int TAB_GROUPUSERS = 7;
     public static final int TAB_STORIES = 8;
     public static final int TAB_ARCHIVED_STORIES = 9;
+    public static final int TAB_REELS = 15;
     public static final int TAB_RECOMMENDED_CHANNELS = 10;
     public static final int TAB_SAVED_DIALOGS = 11;
     public static final int TAB_SAVED_MESSAGES = 12;
@@ -508,6 +512,7 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
         private ClippingImageView animatingImageView;
         private RecyclerAnimationScrollHelper scrollHelper;
         public int selectedType;
+        ShortsProfileReelsView profileReelsView;
 
         public SharedMediaFastScrollTooltip fastScrollHintView;
         public Runnable fastScrollHideHintRunnable;
@@ -551,7 +556,7 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
                     fastScrollHintView.setTranslationY(y);
                 }
 
-                if (fastScroll.getProgress() > 0.85f) {
+                if (fastScroll != null && fastScroll.getProgress() > 0.85f) {
                     showFastScrollHint(this, null, false);
                 }
             }
@@ -3835,6 +3840,65 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
         return false;
     }
 
+    private boolean isProfileReelsAvailable() {
+        if (viewType != VIEW_TYPE_PROFILE_ACTIVITY || !DialogObject.isUserDialog(dialog_id)) return false;
+        final boolean own = dialog_id == UserConfig.getInstance(currentAccount).getClientUserId();
+        if (own) return true;
+        final TLRPC.User user = MessagesController.getInstance(currentAccount).getUser(dialog_id);
+        return user != null && !TextUtils.isEmpty(UserObject.getPublicUsername(user));
+    }
+
+    private ShortsProfileReelsView ensureProfileReelsView(MediaPage page) {
+        if (page.profileReelsView != null || !isProfileReelsAvailable()) return page.profileReelsView;
+        final TLRPC.User profileUser = MessagesController.getInstance(currentAccount).getUser(dialog_id);
+        final String profileUsername = profileUser != null ? UserObject.getPublicUsername(profileUser) : null;
+        final boolean ownProfile = dialog_id == UserConfig.getInstance(currentAccount).getClientUserId();
+        page.profileReelsView = new ShortsProfileReelsView(getContext(), currentAccount, profileUsername, ownProfile, new ShortsProfileReelsView.Delegate() {
+            @Override public void onOpen(ShortsItem item) {
+                if (profileActivity != null) profileActivity.presentFragment(new ShortsActivity(item));
+            }
+
+            @Override public void onUpload() {
+                startProfileReelUpload();
+            }
+        });
+        page.profileReelsView.setVisibility(View.GONE);
+        page.addView(page.profileReelsView, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT, Gravity.FILL, 0, 48 + 6, 0, 0));
+        return page.profileReelsView;
+    }
+
+    private void startProfileReelUpload() {
+        if (!isProfileReelsAvailable() || dialog_id != UserConfig.getInstance(currentAccount).getClientUserId() || profileActivity == null) return;
+        final Bundle args = new Bundle();
+        args.putBoolean("onlySelect", true);
+        args.putInt("dialogsType", DialogsActivity.DIALOGS_TYPE_CHANNELS_ONLY);
+        args.putString("selectAlertString", LocaleController.getString(R.string.ShortsChoosePublicChannel));
+        final DialogsActivity picker = new DialogsActivity(args);
+        picker.setDelegate((fragment, selected, message, param, notify, scheduleDate, scheduleRepeatPeriod, topicsFragment) -> {
+            if (selected == null || selected.isEmpty()) return false;
+            final long peerId = selected.get(0).dialogId;
+            final TLRPC.Chat chat = MessagesController.getInstance(currentAccount).getChat(-peerId);
+            if (chat == null || TextUtils.isEmpty(ChatObject.getPublicUsername(chat)) || !ChatObject.canPost(chat)) {
+                if (profileActivity.getParentActivity() != null) {
+                    new AlertDialog.Builder(profileActivity.getParentActivity())
+                            .setTitle(LocaleController.getString(R.string.AppName))
+                            .setMessage(LocaleController.getString(R.string.ShortsChoosePublicChannel))
+                            .setPositiveButton(LocaleController.getString(R.string.OK), null)
+                            .show();
+                }
+                return false;
+            }
+            final Bundle chatArgs = new Bundle();
+            chatArgs.putLong("chat_id", chat.id);
+            final ChatActivity chatActivity = new ChatActivity(chatArgs);
+            fragment.removeSelfFromStack();
+            profileActivity.presentFragment(chatActivity);
+            AndroidUtilities.runOnUIThread(chatActivity::openReelUploadPicker, 350);
+            return true;
+        });
+        profileActivity.presentFragment(picker);
+    }
+
     protected boolean isArchivedOnlyStoriesView() {
         return false;
     }
@@ -4723,6 +4787,10 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
     }
 
     private void scrollToTop() {
+        if (mediaPages[0].selectedType == TAB_REELS) {
+            if (mediaPages[0].profileReelsView != null) mediaPages[0].profileReelsView.scrollToTop();
+            return;
+        }
         int height;
         switch (mediaPages[0].selectedType) {
             case 0:
@@ -4940,6 +5008,7 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
     }
 
     public boolean isSearchItemVisible(int type) {
+        if (type == TAB_REELS) return false;
         if (type == TAB_GROUPUSERS) {
             return delegate.canSearchMembers();
         }
@@ -6992,6 +7061,14 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
                     }
                 }
             }
+            if (isProfileReelsAvailable()) {
+                for (int i = tabs.size() - 1; i >= 0; i--) {
+                    if (tabs.get(i).first == TAB_STORIES || tabs.get(i).first == TAB_ARCHIVED_STORIES) tabs.remove(i);
+                }
+                tabs.add(0, new Pair(TAB_STORIES, getString(R.string.ProfilePosts)));
+                tabs.add(1, new Pair(TAB_ARCHIVED_STORIES, getString(R.string.ProfileArchived)));
+                tabs.add(2, new Pair(TAB_REELS, getString(R.string.ShortsTitle)));
+            }
             if (hasGifts) {
                 tabs.add(new Pair(TAB_GIFTS, TextUtils.concat(getString(R.string.ProfileGifts), giftsContainer.getLastEmojis(null))));
                 giftsLastHash = giftsContainer.getLastEmojisHash();
@@ -7125,6 +7202,16 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
             mediaPages[a].listView.stopScroll();
         }
         int a = animated ? 1 : 0;
+        if (mediaPages[a].selectedType == TAB_REELS) {
+            mediaPages[a].listView.setVisibility(View.GONE);
+            mediaPages[a].animationSupportingListView.setVisibility(View.GONE);
+            if (mediaPages[a].fastScrollHintView != null) mediaPages[a].fastScrollHintView.setVisibility(View.GONE);
+            final ShortsProfileReelsView reelsView = ensureProfileReelsView(mediaPages[a]);
+            if (reelsView != null) reelsView.setVisibility(View.VISIBLE);
+            return;
+        }
+        if (mediaPages[a].profileReelsView != null) mediaPages[a].profileReelsView.setVisibility(View.GONE);
+        mediaPages[a].listView.setVisibility(View.VISIBLE);
         FrameLayout.LayoutParams layoutParams = (LayoutParams) mediaPages[a].getLayoutParams();
         layoutParams.topMargin = dp(mediaPageTopMargin());
 //        mediaPages[a].setBackground(null);

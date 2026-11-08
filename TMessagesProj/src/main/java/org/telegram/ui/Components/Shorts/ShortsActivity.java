@@ -3,10 +3,10 @@ package org.telegram.ui.Components.Shorts;
 import static org.telegram.messenger.AndroidUtilities.dp;
 
 import android.content.Context;
-import android.graphics.Color;
 import android.graphics.PorterDuff;
 import android.graphics.PorterDuffColorFilter;
 import android.os.Bundle;
+import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -58,6 +58,7 @@ public class ShortsActivity extends BaseFragment implements NotificationCenter.N
     private Adapter adapter;
     private TextView emptyView;
     private RadialProgressView progressView;
+    private ImageView backButton;
     private int currentPage = RecyclerView.NO_POSITION;
     private boolean paused = true;
 
@@ -90,6 +91,7 @@ public class ShortsActivity extends BaseFragment implements NotificationCenter.N
         getNotificationCenter().addObserver(this, NotificationCenter.didUpdateReactions);
         getNotificationCenter().addObserver(this, NotificationCenter.messagesDeleted);
         getNotificationCenter().addObserver(this, NotificationCenter.appDidLogout);
+        NotificationCenter.getGlobalInstance().addObserver(this, NotificationCenter.didSetNewTheme);
         if (startItem != null) {
             addItems(Collections.singletonList(startItem));
             repository.startAfter(startItem);
@@ -103,6 +105,7 @@ public class ShortsActivity extends BaseFragment implements NotificationCenter.N
         getNotificationCenter().removeObserver(this, NotificationCenter.didUpdateReactions);
         getNotificationCenter().removeObserver(this, NotificationCenter.messagesDeleted);
         getNotificationCenter().removeObserver(this, NotificationCenter.appDidLogout);
+        NotificationCenter.getGlobalInstance().removeObserver(this, NotificationCenter.didSetNewTheme);
         repository.cancel();
         releasePlayers();
         super.onFragmentDestroy();
@@ -130,7 +133,7 @@ public class ShortsActivity extends BaseFragment implements NotificationCenter.N
     @Override
     public View createView(Context context) {
         final FrameLayout root = new FrameLayout(context);
-        root.setBackgroundColor(Color.BLACK);
+        root.setBackgroundColor(getThemedColor(Theme.key_windowBackgroundWhite));
         root.setKeepScreenOn(true);
         fragmentView = root;
 
@@ -140,26 +143,27 @@ public class ShortsActivity extends BaseFragment implements NotificationCenter.N
         root.addView(pager, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
 
         progressView = new RadialProgressView(context);
-        progressView.setProgressColor(Color.WHITE);
+        progressView.setProgressColor(getThemedColor(Theme.key_windowBackgroundWhiteBlueText4));
         root.addView(progressView, LayoutHelper.createFrame(48, 48, Gravity.CENTER));
 
         emptyView = new TextView(context);
-        emptyView.setTextColor(0xccffffff);
+        emptyView.setTextColor(getThemedColor(Theme.key_windowBackgroundWhiteGrayText));
         emptyView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 16);
         emptyView.setGravity(Gravity.CENTER);
         emptyView.setVisibility(View.GONE);
         root.addView(emptyView, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, Gravity.CENTER, 32, 0, 32, 0));
 
-        final ImageView backButton = new ImageView(context);
+        backButton = new ImageView(context);
         backButton.setImageResource(R.drawable.ic_ab_back);
         backButton.setScaleType(ImageView.ScaleType.CENTER);
-        backButton.setColorFilter(new PorterDuffColorFilter(Color.WHITE, PorterDuff.Mode.SRC_IN));
-        backButton.setBackground(Theme.createSelectorDrawable(0x33ffffff, 1));
+        backButton.setColorFilter(new PorterDuffColorFilter(getThemedColor(Theme.key_windowBackgroundWhiteBlackText), PorterDuff.Mode.SRC_IN));
+        backButton.setBackground(Theme.createSelectorDrawable(Theme.multAlpha(getThemedColor(Theme.key_windowBackgroundWhiteBlueText4), 0.18f), 1));
         backButton.setContentDescription(LocaleController.getString(R.string.AccDescrGoBack));
         backButton.setOnClickListener(v -> finishFragment());
         root.addView(backButton, LayoutHelper.createFrame(44, 44, Gravity.TOP | Gravity.LEFT, 6, AndroidUtilities.statusBarHeight / AndroidUtilities.density + 36, 0, 0));
 
         updateState();
+        updateThemeColors();
         if (!items.isEmpty()) {
             pager.setCurrentPage(Math.max(0, currentPage), false);
         }
@@ -320,16 +324,20 @@ public class ShortsActivity extends BaseFragment implements NotificationCenter.N
 
     @Override
     public boolean isLightStatusBar() {
-        return false;
+        return !Theme.isCurrentThemeDark();
     }
 
     @Override
     public int getNavigationBarColor() {
-        return Color.BLACK;
+        return getThemedColor(Theme.key_windowBackgroundWhite);
     }
 
     @Override
     public void didReceivedNotification(int id, int account, Object... args) {
+        if (id == NotificationCenter.didSetNewTheme) {
+            updateThemeColors();
+            return;
+        }
         if (account != currentAccount) {
             return;
         }
@@ -392,6 +400,30 @@ public class ShortsActivity extends BaseFragment implements NotificationCenter.N
         }
     }
 
+    private void updateThemeColors() {
+        if (fragmentView != null) {
+            fragmentView.setBackgroundColor(getThemedColor(Theme.key_windowBackgroundWhite));
+        }
+        if (progressView != null) {
+            progressView.setProgressColor(getThemedColor(Theme.key_windowBackgroundWhiteBlueText4));
+        }
+        if (emptyView != null) {
+            emptyView.setTextColor(getThemedColor(Theme.key_windowBackgroundWhiteGrayText));
+        }
+        if (backButton != null) {
+            backButton.setColorFilter(new PorterDuffColorFilter(getThemedColor(Theme.key_windowBackgroundWhiteBlackText), PorterDuff.Mode.SRC_IN));
+            backButton.setBackground(Theme.createSelectorDrawable(Theme.multAlpha(getThemedColor(Theme.key_windowBackgroundWhiteBlueText4), 0.18f), 1));
+        }
+        if (pager != null) {
+            for (int i = 0; i < pager.getChildCount(); i++) {
+                final View child = pager.getChildAt(i);
+                if (child instanceof ShortsCell) {
+                    ((ShortsCell) child).updateThemeColors();
+                }
+            }
+        }
+    }
+
     @Override
     public void onToggleLike(ShortsCell cell, boolean fromDoubleTap) {
         final ShortsItem item = cell.getItem();
@@ -437,6 +469,11 @@ public class ShortsActivity extends BaseFragment implements NotificationCenter.N
     public void onShare(ShortsCell cell) {
         final ShortsItem item = cell.getItem();
         if (item == null) {
+            return;
+        }
+        if (getParentActivity() == null) return;
+        if (!TextUtils.isEmpty(item.publicShareUrl)) {
+            showDialog(ShareAlert.createShareAlert(getParentActivity(), null, item.publicShareUrl, false, item.publicShareUrl, false));
             return;
         }
         repository.exportLink(item, link -> {

@@ -13675,6 +13675,21 @@ public class ChatActivity extends BaseFragment implements
         showDialog(chatAttachAlert);
     }
 
+    /** Opens the existing channel media/upload flow for a Reel, which is a normal video post. */
+    public void openReelUploadPicker() {
+        if (getParentActivity() == null || currentChat == null || !ChatObject.isChannel(currentChat) || !ChatObject.canPost(currentChat)) return;
+        try {
+            final Intent videoPicker = new Intent(Intent.ACTION_GET_CONTENT);
+            videoPicker.setType("video/*");
+            videoPicker.putExtra(MediaStore.EXTRA_SIZE_LIMIT, FileLoader.DEFAULT_MAX_FILE_SIZE);
+            videoPicker.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivityForResult(videoPicker, 1);
+        } catch (Exception e) {
+            FileLog.e(e);
+            showAttachmentError();
+        }
+    }
+
     public void openAttachMenuForCreatingSticker() {
         ContentPreviewViewer.getInstance().setStickerSetForCustomSticker(null);
         if (getParentActivity() == null) {
@@ -20616,7 +20631,8 @@ public class ChatActivity extends BaseFragment implements
                     return;
                 }
                 Uri uri = data.getData();
-                if (uri.toString().contains("video")) {
+                final String mimeType = data.getType();
+                if (mimeType != null && mimeType.startsWith("video/") || uri.toString().toLowerCase(Locale.US).contains("video")) {
                     String videoPath = null;
                     try {
                         videoPath = AndroidUtilities.getPath(uri);
@@ -20625,6 +20641,7 @@ public class ChatActivity extends BaseFragment implements
                     }
                     if (videoPath == null) {
                         showAttachmentError();
+                        return;
                     }
                     if (paused) {
                         startVideoEdit = videoPath;

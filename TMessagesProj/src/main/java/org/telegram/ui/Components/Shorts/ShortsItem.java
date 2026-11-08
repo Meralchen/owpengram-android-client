@@ -22,6 +22,8 @@ public final class ShortsItem {
     public final int messageId;
     public final MessageObject messageObject;
     public final TLRPC.Document document;
+    /** Canonical public-profile API share URL, when this item came from a profile grid. */
+    public String publicShareUrl;
 
     /** next_rate of the searchGlobal page this clip came from (feed cursor). */
     public int pageRate;
