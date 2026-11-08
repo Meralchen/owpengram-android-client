@@ -395,8 +395,8 @@ public class MainTabsActivity extends ViewPagerActivity implements NotificationC
         }
         rebuildTabButtons(getContext());
         final int target = positionForTab(currentTab) >= 0 ? positionForTab(currentTab) : Math.max(0, positionForTab(TAB_CHATS));
-        viewPager.getAdapter().notifyDataSetChanged();
-        viewPager.scrollToPosition(target);
+        viewPager.setPosition(target);
+        viewPager.rebuild(false);
         selectTab(target, false);
     }
 

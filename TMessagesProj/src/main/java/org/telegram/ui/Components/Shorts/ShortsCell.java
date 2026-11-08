@@ -51,6 +51,7 @@ import org.telegram.ui.Components.AvatarDrawable;
 import org.telegram.ui.Components.BackupImageView;
 import org.telegram.ui.Components.LayoutHelper;
 import org.telegram.ui.Components.RadialProgressView;
+import org.telegram.ui.ActionBar.Theme;
 
 /** One fullscreen clip: video surface, story-like top timeline/creator row and bottom action overlay. */
 @OptIn(markerClass = UnstableApi.class)

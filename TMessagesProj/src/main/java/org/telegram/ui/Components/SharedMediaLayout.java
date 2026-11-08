@@ -3842,18 +3842,21 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
 
     private boolean isProfileReelsAvailable() {
         if (viewType != VIEW_TYPE_PROFILE_ACTIVITY || !DialogObject.isUserDialog(dialog_id)) return false;
-        final boolean own = dialog_id == UserConfig.getInstance(currentAccount).getClientUserId();
+        if (profileActivity == null) return false;
+        final int account = profileActivity.getCurrentAccount();
+        final boolean own = dialog_id == UserConfig.getInstance(account).getClientUserId();
         if (own) return true;
-        final TLRPC.User user = MessagesController.getInstance(currentAccount).getUser(dialog_id);
+        final TLRPC.User user = MessagesController.getInstance(account).getUser(dialog_id);
         return user != null && !TextUtils.isEmpty(UserObject.getPublicUsername(user));
     }
 
     private ShortsProfileReelsView ensureProfileReelsView(MediaPage page) {
         if (page.profileReelsView != null || !isProfileReelsAvailable()) return page.profileReelsView;
-        final TLRPC.User profileUser = MessagesController.getInstance(currentAccount).getUser(dialog_id);
+        final int account = profileActivity.getCurrentAccount();
+        final TLRPC.User profileUser = MessagesController.getInstance(account).getUser(dialog_id);
         final String profileUsername = profileUser != null ? UserObject.getPublicUsername(profileUser) : null;
-        final boolean ownProfile = dialog_id == UserConfig.getInstance(currentAccount).getClientUserId();
-        page.profileReelsView = new ShortsProfileReelsView(getContext(), currentAccount, profileUsername, ownProfile, new ShortsProfileReelsView.Delegate() {
+        final boolean ownProfile = dialog_id == UserConfig.getInstance(account).getClientUserId();
+        page.profileReelsView = new ShortsProfileReelsView(getContext(), account, profileUsername, ownProfile, new ShortsProfileReelsView.Delegate() {
             @Override public void onOpen(ShortsItem item) {
                 if (profileActivity != null) profileActivity.presentFragment(new ShortsActivity(item));
             }
@@ -3868,7 +3871,9 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
     }
 
     private void startProfileReelUpload() {
-        if (!isProfileReelsAvailable() || dialog_id != UserConfig.getInstance(currentAccount).getClientUserId() || profileActivity == null) return;
+        if (!isProfileReelsAvailable() || profileActivity == null) return;
+        final int account = profileActivity.getCurrentAccount();
+        if (dialog_id != UserConfig.getInstance(account).getClientUserId()) return;
         final Bundle args = new Bundle();
         args.putBoolean("onlySelect", true);
         args.putInt("dialogsType", DialogsActivity.DIALOGS_TYPE_CHANNELS_ONLY);
@@ -3877,7 +3882,7 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
         picker.setDelegate((fragment, selected, message, param, notify, scheduleDate, scheduleRepeatPeriod, topicsFragment) -> {
             if (selected == null || selected.isEmpty()) return false;
             final long peerId = selected.get(0).dialogId;
-            final TLRPC.Chat chat = MessagesController.getInstance(currentAccount).getChat(-peerId);
+            final TLRPC.Chat chat = MessagesController.getInstance(account).getChat(-peerId);
             if (chat == null || TextUtils.isEmpty(ChatObject.getPublicUsername(chat)) || !ChatObject.canPost(chat)) {
                 if (profileActivity.getParentActivity() != null) {
                     new AlertDialog.Builder(profileActivity.getParentActivity())
