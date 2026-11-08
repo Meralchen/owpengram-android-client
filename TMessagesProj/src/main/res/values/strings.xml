@@ -11649,7 +11649,7 @@
     <string name="NoPaidMessagesTokenUsed">un1 used your QR code and can message you for free</string>
     <string name="NoPaidMessagesTokenUsedOut">You used the QR code of un1 and can message them for free</string>
     <string name="NoPaidMessagesTokenImported">You can now message **%1$s** for free.</string>
-    <string name="ShortsTitle">Clips</string>
+    <string name="ShortsTitle">Reels</string>
     <string name="ShortsEmpty">No channel videos yet. Shorts are made from regular video posts in channels.</string>
     <string name="ShortsLoadFailed">Couldn’t load videos. Tap to try again.</string>
     <string name="ShortsShare">Share</string>

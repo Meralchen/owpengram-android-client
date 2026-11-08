@@ -543,6 +543,7 @@ public class GlassTabView extends FrameLayout implements MainTabsLayout.Tab, Fac
     }
 
     public enum TabAnimation {
+        REELS(TabAnimationType.STATIC, R.drawable.outline_profile_video_24),
         CONTACTS(R.raw.tab_contacts),
         CALLS(R.raw.tab_calls),
         CHATS(R.raw.tab_chats),

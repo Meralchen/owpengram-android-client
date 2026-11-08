@@ -606,6 +606,7 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
     private final static int enable_no_forwards = 46;
     private final static int disable_no_forwards = 47;
     private final static int send_money = 48;
+    private final static int settings_from_profile = 49;
 
     private Rect rect = new Rect();
 
@@ -2569,6 +2570,8 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
                         return;
                     }
                     finishFragment();
+                } else if (id == settings_from_profile) {
+                    presentFragment(new SettingsActivity());
                 } else if (id == block_contact) {
                     onBlockContactClicked(false);
                 } else if (id == add_contact) {
@@ -12180,6 +12183,9 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
                     setUsernameItem = otherItem.addSubItem(set_username, R.drawable.menu_username_change, getString(R.string.ProfileUsernameEdit));
                     linkItem = otherItem.addSubItem(copy_link_profile, R.drawable.msg_link2, getString(R.string.ProfileCopyLink));
                     updateItemsUsername();
+                    if (hasMainTabs) {
+                        otherItem.addSubItem(settings_from_profile, R.drawable.outline_profile_settings, getString(R.string.Settings));
+                    }
                 }
                 selfUser = true;
             } else {
