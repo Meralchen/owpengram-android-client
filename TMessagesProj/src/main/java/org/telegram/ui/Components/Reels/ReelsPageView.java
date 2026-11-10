@@ -224,12 +224,12 @@ public class ReelsPageView extends FrameLayout {
         actions.setOrientation(LinearLayout.VERTICAL);
         actions.setGravity(Gravity.CENTER_HORIZONTAL);
 
-        likeButton = new ActionButton(context, R.drawable.msg_reactions_like, () -> {
+        likeButton = new ActionButton(context, R.drawable.media_like, () -> {
             if (delegate != null) delegate.onToggleLike(this, false);
         });
         actions.addView(likeButton);
 
-        commentsButton = new ActionButton(context, R.drawable.msg_replies, () -> {
+        commentsButton = new ActionButton(context, R.drawable.menu_comments, () -> {
             if (delegate != null) delegate.onOpenComments(this);
         });
         actions.addView(commentsButton);
@@ -251,13 +251,13 @@ public class ReelsPageView extends FrameLayout {
         addView(progressView, LayoutHelper.createFrame(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT, Gravity.CENTER));
 
         playIcon = new ImageView(context);
-        playIcon.setImageResource(R.drawable.play);
+        playIcon.setImageResource(R.drawable.play_mini_video);
         playIcon.setColorFilter(new PorterDuffColorFilter(Color.WHITE, PorterDuff.Mode.SRC_IN));
         playIcon.setVisibility(GONE);
         addView(playIcon, LayoutHelper.createFrame(64, 64, Gravity.CENTER));
 
         heartView = new ImageView(context);
-        heartView.setImageResource(R.drawable.msg_reactions_like);
+        heartView.setImageResource(R.drawable.media_like_active);
         heartView.setColorFilter(new PorterDuffColorFilter(0xFFFF3B30, PorterDuff.Mode.SRC_IN));
         heartView.setVisibility(GONE);
         addView(heartView, LayoutHelper.createFrame(96, 96, Gravity.CENTER));
@@ -359,18 +359,21 @@ public class ReelsPageView extends FrameLayout {
     }
 
     private void bindProfile(ReelsItem item) {
-        titleView.setText(!TextUtils.isEmpty(item.creatorName) ? item.creatorName : "User");
+        final String name = !TextUtils.isEmpty(item.creatorName) ? item.creatorName : item.creatorUsername;
+        titleView.setText(!TextUtils.isEmpty(name) ? name : "User");
         subtitleView.setText(!TextUtils.isEmpty(item.creatorUsername) ? "@" + item.creatorUsername : "");
-        avatarDrawable.setInfo(item.account, item.creatorName, item.creatorUsername, false);
-        avatarView.setImage(ImageLocation.getForPath(item.thumbnailUrl), "50_50", avatarDrawable, null);
-        if (item.thumbnailUrl != null) {
-            thumbView.setImage(ImageLocation.getForPath(item.thumbnailUrl), null, null);
+        avatarDrawable.setInfo(item.creatorUsername != null ? item.creatorUsername.hashCode() : 0, name, null);
+        avatarView.setImageDrawable(avatarDrawable);
+        if (!TextUtils.isEmpty(item.thumbnailUrl)) {
+            thumbView.setImage(ImageLocation.getForPath(item.thumbnailUrl), "1280_1280", (android.graphics.drawable.Drawable) null, null);
+        } else {
+            thumbView.clearImage();
         }
     }
 
     public void updateCounters() {
         if (item == null) return;
-        likeButton.setIcon(item.liked ? R.drawable.msg_reactions_like : R.drawable.msg_reactions_like,
+        likeButton.setIcon(item.liked ? R.drawable.media_like_active : R.drawable.media_like,
                 item.liked ? 0xFFFF3B30 : Color.WHITE);
         likeButton.setText(item.likes > 0 ? String.valueOf(item.likes) : "");
         commentsButton.setText(item.comments > 0 ? String.valueOf(item.comments) : "");

@@ -152,7 +152,7 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
         moreButton = new ImageView(context);
         moreButton.setImageResource(R.drawable.ic_ab_other);
         moreButton.setColorFilter(new PorterDuffColorFilter(Color.WHITE, PorterDuff.Mode.SRC_IN));
-        moreButton.setContentDescription(LocaleController.getString(R.string.More));
+        moreButton.setContentDescription(LocaleController.getString(R.string.AccDescrMoreOptions));
         moreButton.setPadding(AndroidUtilities.dp(12), AndroidUtilities.dp(12), AndroidUtilities.dp(12), AndroidUtilities.dp(12));
         moreButton.setOnClickListener(this::showMoreMenu);
         root.addView(moreButton, LayoutHelper.createFrame(48, 48, Gravity.TOP | Gravity.RIGHT, 0, 32, 4, 0));
@@ -459,21 +459,32 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
     }
 
     @Override
-    public boolean onBackPressed() {
-        handleBackNavigation();
+    public boolean onBackPressed(boolean invoked) {
+        if (invoked) {
+            handleBackNavigation();
+        }
         return false;
     }
 
     @Override
-    public void onSelected() {
+    public void onBecomeFullyVisible() {
+        super.onBecomeFullyVisible();
         paused = false;
         refreshPlayers();
     }
 
     @Override
-    public void onUnSelected() {
+    public void onBecomeFullyHidden() {
+        super.onBecomeFullyHidden();
         paused = true;
-        if (playerPool != null) playerPool.pauseAll();
+        if (playerPool != null) {
+            playerPool.pauseAll();
+        }
+    }
+
+    @Override
+    public boolean canParentTabsSlide(MotionEvent event, boolean forward) {
+        return false;
     }
 
     private final class Adapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {

@@ -115,6 +115,10 @@ public final class ReelsProfileGridView extends FrameLayout implements Notificat
         uploadButton.setVisibility(ownProfile ? View.VISIBLE : View.GONE);
     }
 
+    public void scrollToTop() {
+        if (grid != null) grid.smoothScrollToPosition(0);
+    }
+
     @Override protected void onAttachedToWindow() {
         super.onAttachedToWindow();
         if (!observingTheme) {
@@ -269,7 +273,7 @@ public final class ReelsProfileGridView extends FrameLayout implements Notificat
             Entry entry = entries.get(position);
             views.setText("");
             if (entry.item != null && entry.item.source == ReelsItem.Source.PROFILE) {
-                if (entry.item.thumbnailUrl != null) thumb.setImage(ImageLocation.getForPath(entry.item.thumbnailUrl), "120_213", null, null);
+                if (entry.item.thumbnailUrl != null) thumb.setImage(ImageLocation.getForPath(entry.item.thumbnailUrl), "120_213", (android.graphics.drawable.Drawable) null, null);
                 else thumb.setImageDrawable(null);
                 if (entry.item.views > 0) views.setText(LocaleController.formatShortNumber(entry.item.views, null));
             } else if (entry.item != null && entry.item.document != null) {
