@@ -380,6 +380,23 @@ public class ReelsPageView extends FrameLayout {
         viewsButton.setText(item.views > 0 ? String.valueOf(item.views) : "");
     }
 
+    @Override
+    protected void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        attached = true;
+        if (player != null && player.isPlaying()) {
+            removeCallbacks(timelineUpdater);
+            post(timelineUpdater);
+        }
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        super.onDetachedFromWindow();
+        attached = false;
+        removeCallbacks(timelineUpdater);
+    }
+
     public void attachPlayer(ExoPlayer newPlayer) {
         if (player == newPlayer) return;
         if (player != null) {
@@ -392,6 +409,7 @@ public class ReelsPageView extends FrameLayout {
             updatePlayPauseIcon();
             if (player.isPlaying()) {
                 thumbView.animate().alpha(0f).setDuration(ReelsViewer.isReducedMotion() ? 0 : 150).start();
+                removeCallbacks(timelineUpdater);
                 post(timelineUpdater);
             }
         }
@@ -402,7 +420,7 @@ public class ReelsPageView extends FrameLayout {
             player.removeListener(playerListener);
             player = null;
         }
-        attached = false;
+        removeCallbacks(timelineUpdater);
         thumbView.setAlpha(1f);
     }
 
@@ -481,9 +499,24 @@ public class ReelsPageView extends FrameLayout {
             backgroundPaint.setColor(0x44FFFFFF);
         }
 
+        private int lastRenderedWidth = -1;
+
+        // Bolt optimization: avoid redundant view invalidations during the 60fps playback loop
+        // when the visible progress bar pixel width has not changed.
         public void setProgress(long current, long total) {
+            if (this.currentPosition == current && this.duration == total) {
+                return;
+            }
             this.currentPosition = current;
             this.duration = total;
+            int viewWidth = getWidth();
+            if (viewWidth > 0 && total > 0) {
+                int progressPx = (int) (viewWidth * Math.min(1f, (float) current / (float) total));
+                if (progressPx == lastRenderedWidth) {
+                    return;
+                }
+                lastRenderedWidth = progressPx;
+            }
             invalidate();
         }
 
@@ -494,7 +527,9 @@ public class ReelsPageView extends FrameLayout {
             canvas.drawRect(0, y, getWidth(), y + h, backgroundPaint);
             if (duration > 0) {
                 float progress = Math.min(1f, (float) currentPosition / (float) duration);
-                canvas.drawRect(0, y, getWidth() * progress, y + h, progressPaint);
+                float progressWidth = getWidth() * progress;
+                lastRenderedWidth = (int) progressWidth;
+                canvas.drawRect(0, y, progressWidth, y + h, progressPaint);
             }
         }
     }
