@@ -1,4 +1,4 @@
-package org.telegram.ui.Components.Shorts;
+package org.telegram.ui.Components.Reels;
 
 import android.content.Context;
 
@@ -25,23 +25,23 @@ import java.util.Collections;
  * authenticated profile-Reel media. Keys are account-scoped so logout drops only that account.
  */
 @OptIn(markerClass = UnstableApi.class)
-public final class ShortsCache {
+public final class ReelsCache {
 
     private static final long MAX_BYTES = 512L * 1024 * 1024;
 
     private static volatile SimpleCache cache;
 
-    private ShortsCache() {
+    private ReelsCache() {
     }
 
     public static SimpleCache get(Context context) {
         SimpleCache local = cache;
         if (local == null) {
-            synchronized (ShortsCache.class) {
+            synchronized (ReelsCache.class) {
                 local = cache;
                 if (local == null) {
                     final Context app = context.getApplicationContext();
-                    final File dir = new File(app.getCacheDir(), "shorts");
+                    final File dir = new File(app.getCacheDir(), "reels");
                     local = cache = new SimpleCache(dir, new LeastRecentlyUsedCacheEvictor(MAX_BYTES), new StandaloneDatabaseProvider(app));
                 }
             }
@@ -50,18 +50,18 @@ public final class ShortsCache {
     }
 
     static String keyPrefix(int account) {
-        return "shorts:" + account + ":";
+        return "reels:" + account + ":";
     }
 
     static String profileKey(int account, String reelId) {
-        return "shorts-profile:" + account + ":" + reelId;
+        return "reels-profile:" + account + ":" + reelId;
     }
 
     /** Keeps channel media on MTProto and profile media on authenticated byte-range HTTP. */
-    public static DataSource.Factory dataSourceFactory(Context context, ShortsItem item) {
+    public static DataSource.Factory dataSourceFactory(Context context, ReelsItem item) {
         final String key = item.cacheKey();
         final DataSource.Factory upstream;
-        if (item.source == ShortsItem.Source.PROFILE) {
+        if (item.source == ReelsItem.Source.PROFILE) {
             final DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory();
             if (item.playbackAuthorizationHeader != null) {
                 http.setDefaultRequestProperties(Collections.singletonMap("Authorization", item.playbackAuthorizationHeader));
@@ -79,7 +79,7 @@ public final class ShortsCache {
 
     /** Called on logout: removes the account's cached clips without blocking the caller. */
     public static void clearAccount(int account) {
-        final File dir = new File(ApplicationLoader.applicationContext.getCacheDir(), "shorts");
+        final File dir = new File(ApplicationLoader.applicationContext.getCacheDir(), "reels");
         if (cache == null && !dir.exists()) {
             return;
         }
@@ -87,7 +87,7 @@ public final class ShortsCache {
             try {
                 final SimpleCache c = get(ApplicationLoader.applicationContext);
                 final String prefix = keyPrefix(account);
-                final String profilePrefix = "shorts-profile:" + account + ":";
+                final String profilePrefix = "reels-profile:" + account + ":";
                 for (String key : new ArrayList<>(c.getKeys())) {
                     if (key.startsWith(prefix) || key.startsWith(profilePrefix)) {
                         c.removeResource(key);

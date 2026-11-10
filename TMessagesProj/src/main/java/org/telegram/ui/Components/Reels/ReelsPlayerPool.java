@@ -1,4 +1,4 @@
-package org.telegram.ui.Components.Shorts;
+package org.telegram.ui.Components.Reels;
 
 import android.content.Context;
 import android.net.Uri;
@@ -21,15 +21,16 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Bounded pool: the current clip and its immediate neighbors, never more than
- * {@link #MAX_PLAYERS} ExoPlayer instances. Keyed by adapter position.
+ * Bounded horizontal player pool: the current clip and its immediate horizontal neighbors
+ * (left and right), never more than {@link #MAX_PLAYERS} ExoPlayer instances.
+ * Keyed by horizontal adapter position.
  */
 @OptIn(markerClass = UnstableApi.class)
-public final class ShortsPlayerPool {
+public final class ReelsPlayerPool {
 
     public static final int MAX_PLAYERS = 3;
-    private static final int AHEAD = 1;
-    private static final int BEHIND = 1;
+    private static final int AHEAD = 1;  // Right neighbor
+    private static final int BEHIND = 1; // Left neighbor
 
     public interface Listener {
         void onPlayerReady();
@@ -37,10 +38,10 @@ public final class ShortsPlayerPool {
 
     private static final class Entry {
         final ExoPlayer player;
-        final ShortsItem item;
+        final ReelsItem item;
         TextureView view;
 
-        Entry(ExoPlayer player, ShortsItem item) {
+        Entry(ExoPlayer player, ReelsItem item) {
             this.player = player;
             this.item = item;
         }
@@ -53,13 +54,13 @@ public final class ShortsPlayerPool {
     private int current = -1;
     private int generation;
 
-    public ShortsPlayerPool(Context context, Listener listener) {
+    public ReelsPlayerPool(Context context, Listener listener) {
         app = context.getApplicationContext();
         this.listener = listener;
     }
 
     /** Returns the prepared (paused) player for a clip, creating it if it is within the window. */
-    public ExoPlayer acquire(int position, ShortsItem item) {
+    public ExoPlayer acquire(int position, ReelsItem item) {
         if (current >= 0 && (position < current - BEHIND || position > current + AHEAD)) {
             return null;
         }
@@ -69,7 +70,7 @@ public final class ShortsPlayerPool {
             entry = null;
         }
         if (entry == null) {
-            if (item.source == ShortsItem.Source.PROFILE && item.playbackAuthorizationHeader == null) {
+            if (item.source == ReelsItem.Source.PROFILE && item.playbackAuthorizationHeader == null) {
                 prepareProfileAuthorization(position, item);
                 return null;
             }
@@ -89,7 +90,7 @@ public final class ShortsPlayerPool {
         return entry != null ? entry.player : null;
     }
 
-    /** Moves the window, pausing and releasing players outside the current clip's neighbors. */
+    /** Moves the window horizontally, pausing and releasing players outside the current clip's neighbors. */
     public void setCurrent(int position) {
         current = position;
         pauseAll();
@@ -140,12 +141,12 @@ public final class ShortsPlayerPool {
         current = -1;
     }
 
-    private void prepareProfileAuthorization(int position, ShortsItem item) {
+    private void prepareProfileAuthorization(int position, ReelsItem item) {
         if (!pendingAuthorization.add(item.reelId)) {
             return;
         }
         final int requestGeneration = generation;
-        ShortsBackendApi.authorizationHeader(item.account, header -> {
+        ReelsBackendApi.authorizationHeader(item.account, header -> {
             pendingAuthorization.remove(item.reelId);
             if (header == null || requestGeneration != generation) {
                 return;
@@ -202,8 +203,8 @@ public final class ShortsPlayerPool {
         entry.player.release();
     }
 
-    private ExoPlayer create(ShortsItem item) {
-        final Uri uri = item.source == ShortsItem.Source.PROFILE
+    private ExoPlayer create(ReelsItem item) {
+        final Uri uri = item.source == ReelsItem.Source.PROFILE
                 ? (item.mediaUrl != null ? Uri.parse(item.mediaUrl) : null)
                 : item.mtprotoUri();
         if (uri == null) {
@@ -218,8 +219,7 @@ public final class ShortsPlayerPool {
                 .build(), true);
         player.setRepeatMode(Player.REPEAT_MODE_ONE);
         player.setPlayWhenReady(false);
-        // TODO: switch to HlsMediaSource.Factory once the server serves .m3u8 manifests.
-        player.setMediaSource(new ProgressiveMediaSource.Factory(ShortsCache.dataSourceFactory(app, item))
+        player.setMediaSource(new ProgressiveMediaSource.Factory(ReelsCache.dataSourceFactory(app, item))
                 .createMediaSource(MediaItem.fromUri(uri)));
         if (item.resumePositionMs > 0) {
             player.seekTo(item.resumePositionMs);

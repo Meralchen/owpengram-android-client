@@ -1,4 +1,4 @@
-package org.telegram.ui.Components.Shorts;
+package org.telegram.ui.Components.Reels;
 
 import android.net.Uri;
 import android.text.TextUtils;
@@ -14,7 +14,7 @@ import org.telegram.ui.Components.VideoPlayer;
  * A Reel is either a channel message or a profile-owned REST record. Only channel items
  * have a channel/message identity; profile items use their opaque Reel ID.
  */
-public final class ShortsItem {
+public final class ReelsItem {
 
     public enum Source { CHANNEL, PROFILE }
 
@@ -39,7 +39,7 @@ public final class ShortsItem {
     /** Canonical public-profile API share URL, when this item came from a profile grid. */
     public String publicShareUrl;
 
-    /** next_rate of the searchGlobal page this clip came from (feed cursor). */
+    /** next_rate or cursor marker. */
     public int pageRate;
 
     public boolean liked;
@@ -51,7 +51,7 @@ public final class ShortsItem {
     /** Position the user last watched, restored when the page comes back. */
     public long resumePositionMs;
 
-    ShortsItem(int account, TLRPC.Message message, TLRPC.Document document) {
+    ReelsItem(int account, TLRPC.Message message, TLRPC.Document document) {
         this.account = account;
         this.source = Source.CHANNEL;
         this.channelId = message.peer_id.channel_id;
@@ -61,7 +61,7 @@ public final class ShortsItem {
         applyMessage(message);
     }
 
-    private ShortsItem(int account, String reelId) {
+    private ReelsItem(int account, String reelId) {
         this.account = account;
         this.source = Source.PROFILE;
         this.channelId = 0;
@@ -72,7 +72,7 @@ public final class ShortsItem {
         this.commentsEnabled = true;
     }
 
-    public static ShortsItem from(int account, TLRPC.Message message) {
+    public static ReelsItem from(int account, TLRPC.Message message) {
         if (!(message instanceof TLRPC.TL_message) || message.peer_id == null || message.peer_id.channel_id == 0) {
             return null;
         }
@@ -80,18 +80,18 @@ public final class ShortsItem {
         if (document == null) {
             return null;
         }
-        return new ShortsItem(account, message, document);
+        return new ReelsItem(account, message, document);
     }
 
     /** Parses a profile-owned Reel without inventing a channel peer or MTProto message ID. */
-    public static ShortsItem fromProfile(int account, JSONObject object) {
+    public static ReelsItem fromProfile(int account, JSONObject object) {
         if (object == null) return null;
         String id = object.optString("id", "");
         String media = object.optString("mediaUrl", "");
         if (TextUtils.isEmpty(id) || TextUtils.isEmpty(media)) return null;
-        ShortsItem item = new ShortsItem(account, id);
-        item.mediaUrl = ShortsBackendApi.absoluteUrl(account, media);
-        item.thumbnailUrl = ShortsBackendApi.absoluteUrl(account, object.optString("thumbnailUrl", null));
+        ReelsItem item = new ReelsItem(account, id);
+        item.mediaUrl = ReelsBackendApi.absoluteUrl(account, media);
+        item.thumbnailUrl = ReelsBackendApi.absoluteUrl(account, object.optString("thumbnailUrl", null));
         item.profileCaption = object.optString("caption", "");
         item.profileDuration = object.optDouble("duration", 0);
         item.profileWidth = object.optInt("width", 0);
@@ -216,6 +216,6 @@ public final class ShortsItem {
     }
 
     public String cacheKey() {
-        return source == Source.PROFILE ? ShortsCache.profileKey(account, reelId) : ShortsCache.keyPrefix(account) + document.id;
+        return source == Source.PROFILE ? ReelsCache.profileKey(account, reelId) : ReelsCache.keyPrefix(account) + document.id;
     }
 }

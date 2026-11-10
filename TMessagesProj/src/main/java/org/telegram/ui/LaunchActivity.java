@@ -128,8 +128,8 @@ import org.telegram.messenger.MessagesStorage;
 import org.telegram.messenger.NotificationCenter;
 import org.telegram.owpengram.OwpengramServer;
 import org.telegram.owpengram.OwpengramServers;
-import org.telegram.ui.Components.Shorts.ShortsActivity;
-import org.telegram.ui.Components.Shorts.ShortsRepository;
+import org.telegram.ui.Components.Reels.ReelsViewer;
+import org.telegram.ui.Components.Reels.ReelsRepository;
 import org.telegram.messenger.NotificationsController;
 import org.telegram.messenger.OpenAttachedMenuBotReceiver;
 import org.telegram.messenger.PushListenerController;
@@ -1339,7 +1339,7 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
         final String username = path.get(0);
         final int messageId;
         try {
-            if (!ShortsRepository.isValidUsername(username)) {
+            if (!ReelsRepository.isValidUsername(username)) {
                 return false;
             }
             messageId = Integer.parseInt(path.get(2));
@@ -1358,7 +1358,7 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
             progressDialog = new AlertDialog(this, AlertDialog.ALERT_TYPE_SPINNER);
             progressDialog.showDelayed(300);
         }
-        ShortsRepository.resolveLink(account, username, messageId, (item, failure) -> {
+        ReelsRepository.resolveLink(account, username, messageId, (item, failure) -> {
             if (progress != null) {
                 progress.end();
             }
@@ -1375,7 +1375,7 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
                 }
                 return;
             }
-            presentFragment(new ShortsActivity(item));
+            presentFragment(new ReelsViewer(item));
         });
         return true;
     }

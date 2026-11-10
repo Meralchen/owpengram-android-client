@@ -1,4 +1,4 @@
-package org.telegram.ui.Components.Shorts;
+package org.telegram.ui.Components.Reels;
 
 import android.os.AsyncTask;
 import android.text.TextUtils;
@@ -8,7 +8,6 @@ import org.json.JSONObject;
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.MessagesController;
 import org.telegram.tgnet.ConnectionsManager;
-import org.telegram.tgnet.TLObject;
 import org.telegram.tgnet.TLRPC;
 
 import java.io.BufferedReader;
@@ -21,7 +20,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ConcurrentHashMap;
 
 /** REST adapter for profile-owned Reels. The API host follows the account's configured public link domain. */
-public final class ShortsBackendApi {
+public final class ReelsBackendApi {
 
     public interface Callback {
         void onResult(String body, int statusCode);
@@ -39,7 +38,7 @@ public final class ShortsBackendApi {
 
     private static final ConcurrentHashMap<Integer, CachedAuthorization> authorizations = new ConcurrentHashMap<>();
 
-    private ShortsBackendApi() { }
+    private ReelsBackendApi() { }
 
     public static String baseUrl(int account) {
         String host = MessagesController.getInstance(account).linkPrefix;

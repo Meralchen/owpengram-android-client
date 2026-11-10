@@ -1,9 +1,12 @@
-package org.telegram.ui.Components.Shorts;
+package org.telegram.ui.Components.Reels;
 
-import android.util.SparseArray;
 import android.net.Uri;
 import android.text.TextUtils;
+import android.util.SparseArray;
 
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.ChatObject;
 import org.telegram.messenger.MessageObject;
@@ -13,39 +16,35 @@ import org.telegram.tgnet.ConnectionsManager;
 import org.telegram.tgnet.TLObject;
 import org.telegram.tgnet.TLRPC;
 
-import org.json.JSONArray;
-import org.json.JSONException;
-import org.json.JSONObject;
-
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.regex.Pattern;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 
 /**
- * The public feed and profile-Reel interactions use REST. Channel-backed items
+ * The public horizontal feed and profile-Reel interactions use REST. Channel-backed items
  * resolve to normal MTProto messages and keep their existing reaction/discussion RPCs.
  */
-public final class ShortsRepository {
+public final class ReelsRepository {
 
     public static final int PAGE_SIZE = 20;
 
     private static final Pattern USERNAME = Pattern.compile("[A-Za-z][A-Za-z0-9_]{2,31}");
 
     public interface FeedCallback {
-        void onPage(ArrayList<ShortsItem> items, boolean endReached, TLRPC.TL_error error);
+        void onPage(ArrayList<ReelsItem> items, boolean endReached, TLRPC.TL_error error);
     }
 
     public interface ReactionCallback {
-        void onResult(ShortsItem item, TLRPC.TL_error error);
+        void onResult(ReelsItem item, TLRPC.TL_error error);
     }
 
     public interface LinkCallback {
         int NOT_FOUND = 1;
         int NO_ACCESS = 2;
 
-        void onResult(ShortsItem item, int failure);
+        void onResult(ReelsItem item, int failure);
     }
 
     public static final class Discussion {
@@ -74,7 +73,7 @@ public final class ShortsRepository {
     private final SparseArray<Boolean> pendingLikes = new SparseArray<>();
     private final SparseArray<Boolean> inFlightLikes = new SparseArray<>();
 
-    public ShortsRepository(int account) {
+    public ReelsRepository(int account) {
         this.account = account;
     }
 
@@ -98,7 +97,7 @@ public final class ShortsRepository {
     }
 
     /** A linked item is already inserted as page zero; REST feed pagination remains opaque. */
-    public void startAfter(ShortsItem item) {
+    public void startAfter(ReelsItem item) {
         endReached = false;
     }
 
@@ -118,7 +117,7 @@ public final class ShortsRepository {
                 return;
             }
         }
-        ShortsBackendApi.request(account, "GET", path, null, null, false, (body, status) -> {
+        ReelsBackendApi.request(account, "GET", path, null, null, false, (body, status) -> {
             if (generation != requestGeneration) return;
             loading = false;
             if (status < 200 || status >= 300 || body == null) {
@@ -142,14 +141,14 @@ public final class ShortsRepository {
     }
 
     private void resolveFeedItems(JSONArray values, int generation, FeedCallback callback) {
-        final ArrayList<ShortsItem> resolved = new ArrayList<>(Collections.nCopies(values.length(), null));
+        final ArrayList<ReelsItem> resolved = new ArrayList<>(Collections.nCopies(values.length(), null));
         final int[] pending = {0};
         for (int i = 0; i < values.length(); i++) {
             final JSONObject value = values.optJSONObject(i);
             if (value == null) continue;
             final String source = value.optString("source", "");
             if ("profile".equals(source)) {
-                resolved.set(i, ShortsItem.fromProfile(account, value));
+                resolved.set(i, ReelsItem.fromProfile(account, value));
                 continue;
             }
             if (!"channel".equals(source)) continue;
@@ -175,10 +174,10 @@ public final class ShortsRepository {
         }
     }
 
-    private void finishResolvedFeed(ArrayList<ShortsItem> resolved, int generation, FeedCallback callback) {
+    private void finishResolvedFeed(ArrayList<ReelsItem> resolved, int generation, FeedCallback callback) {
         if (generation != requestGeneration) return;
-        final ArrayList<ShortsItem> items = new ArrayList<>();
-        for (ShortsItem item : resolved) {
+        final ArrayList<ReelsItem> items = new ArrayList<>();
+        for (ReelsItem item : resolved) {
             if (item != null) items.add(item);
         }
         callback.onPage(items, endReached, null);
@@ -195,8 +194,8 @@ public final class ShortsRepository {
      * Optimistic heart toggle. Requests per clip are serialized: taps while a request is in
      * flight only update the desired state, which is sent once the previous request returns.
      */
-    public void setLiked(ShortsItem item, boolean liked, ReactionCallback callback) {
-        if (item.source == ShortsItem.Source.PROFILE) {
+    public void setLiked(ReelsItem item, boolean liked, ReactionCallback callback) {
+        if (item.source == ReelsItem.Source.PROFILE) {
             setProfileLiked(item, liked, callback);
             return;
         }
@@ -212,7 +211,7 @@ public final class ShortsRepository {
         sendReaction(item, liked, callback);
     }
 
-    private void setProfileLiked(ShortsItem item, boolean liked, ReactionCallback callback) {
+    private void setProfileLiked(ReelsItem item, boolean liked, ReactionCallback callback) {
         final boolean previousLiked = item.liked;
         final int previousCount = item.likes;
         item.liked = liked;
@@ -227,7 +226,7 @@ public final class ShortsRepository {
             return;
         }
         final String path = "/api/reels/" + Uri.encode(item.reelId) + "/like";
-        ShortsBackendApi.request(account, "PUT", path, body, null, true, (response, status) -> {
+        ReelsBackendApi.request(account, "PUT", path, body, null, true, (response, status) -> {
             if (status >= 200 && status < 300 && response != null) {
                 try {
                     final JSONObject result = new JSONObject(response);
@@ -244,7 +243,7 @@ public final class ShortsRepository {
         });
     }
 
-    private void sendReaction(ShortsItem item, boolean liked, ReactionCallback callback) {
+    private void sendReaction(ReelsItem item, boolean liked, ReactionCallback callback) {
         inFlightLikes.put(item.messageId, liked);
         final TLRPC.TL_messages_sendReaction req = new TLRPC.TL_messages_sendReaction();
         req.peer = controller().getInputPeer(item.getDialogId());
@@ -252,7 +251,7 @@ public final class ShortsRepository {
         req.flags |= 1;
         if (liked) {
             final TLRPC.TL_reactionEmoji heart = new TLRPC.TL_reactionEmoji();
-            heart.emoticon = ShortsItem.HEART;
+            heart.emoticon = ReelsItem.HEART;
             req.reaction.add(heart);
         }
         ConnectionsManager.getInstance(account).sendRequest(req, (response, error) -> {
@@ -282,11 +281,11 @@ public final class ShortsRepository {
         });
     }
 
-    public boolean hasPendingReaction(ShortsItem item) {
-        return item.source == ShortsItem.Source.CHANNEL && inFlightLikes.get(item.messageId) != null;
+    public boolean hasPendingReaction(ReelsItem item) {
+        return item.source == ReelsItem.Source.CHANNEL && inFlightLikes.get(item.messageId) != null;
     }
 
-    public void loadDiscussion(ShortsItem item, DiscussionCallback callback) {
+    public void loadDiscussion(ReelsItem item, DiscussionCallback callback) {
         final TLRPC.TL_messages_getDiscussionMessage req = new TLRPC.TL_messages_getDiscussionMessage();
         req.peer = controller().getInputPeer(item.getDialogId());
         req.msg_id = item.messageId;
@@ -361,8 +360,8 @@ public final class ShortsRepository {
         });
     }
 
-    public void exportLink(ShortsItem item, Utilities.Callback<String> callback) {
-        if (item.source != ShortsItem.Source.CHANNEL) {
+    public void exportLink(ReelsItem item, Utilities.Callback<String> callback) {
+        if (item.source != ReelsItem.Source.CHANNEL) {
             callback.run(null);
             return;
         }
@@ -427,7 +426,7 @@ public final class ShortsRepository {
             for (int i = 0; i < res.messages.size(); i++) {
                 final TLRPC.Message m = res.messages.get(i);
                 if (m.id == messageId && m.peer_id != null && m.peer_id.channel_id == channelId) {
-                    final ShortsItem item = ShortsItem.from(account, m);
+                    final ReelsItem item = ReelsItem.from(account, m);
                     callback.onResult(item, item != null ? 0 : LinkCallback.NOT_FOUND);
                     return;
                 }

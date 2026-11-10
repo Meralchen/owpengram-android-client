@@ -138,10 +138,10 @@ import org.telegram.ui.ChatActivity;
 import org.telegram.ui.ChatActivityContainer;
 import org.telegram.ui.Components.Forum.ForumUtilities;
 import org.telegram.ui.Components.Premium.LimitReachedBottomSheet;
-import org.telegram.ui.Components.Shorts.ShortsActivity;
-import org.telegram.ui.Components.Shorts.ShortsItem;
-import org.telegram.ui.Components.Shorts.ShortsProfileReelsView;
-import org.telegram.ui.Components.Shorts.ShortsProfileReelUploader;
+import org.telegram.ui.Components.Reels.ReelsViewer;
+import org.telegram.ui.Components.Reels.ReelsItem;
+import org.telegram.ui.Components.Reels.ReelsProfileGridView;
+import org.telegram.ui.Components.Reels.ReelsUploadController;
 import org.telegram.ui.Components.Reactions.ReactionsLayoutInBubble;
 import org.telegram.ui.Components.blur3.BlurredBackgroundDrawableViewFactory;
 import org.telegram.ui.Components.blur3.ViewGroupPartRenderer;
@@ -515,7 +515,7 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
         private ClippingImageView animatingImageView;
         private RecyclerAnimationScrollHelper scrollHelper;
         public int selectedType;
-        ShortsProfileReelsView profileReelsView;
+        ReelsProfileGridView profileReelsView;
 
         public SharedMediaFastScrollTooltip fastScrollHintView;
         public Runnable fastScrollHideHintRunnable;
@@ -3853,17 +3853,17 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
         return user != null && !TextUtils.isEmpty(UserObject.getPublicUsername(user));
     }
 
-    private ShortsProfileReelsView ensureProfileReelsView(MediaPage page) {
+    private ReelsProfileGridView ensureProfileReelsView(MediaPage page) {
         if (page.profileReelsView != null || !isProfileReelsAvailable()) return page.profileReelsView;
         final int account = profileActivity.getCurrentAccount();
         final TLRPC.User profileUser = MessagesController.getInstance(account).getUser(dialog_id);
         final String profileUsername = profileUser != null ? UserObject.getPublicUsername(profileUser) : null;
         final boolean ownProfile = dialog_id == UserConfig.getInstance(account).getClientUserId();
-        page.profileReelsView = new ShortsProfileReelsView(getContext(), account, profileUsername, ownProfile, new ShortsProfileReelsView.Delegate() {
-            @Override public void onOpen(ShortsItem item) {
+        page.profileReelsView = new ReelsProfileGridView(getContext(), account, profileUsername, ownProfile, new ReelsProfileGridView.Delegate() {
+            @Override public void onOpen(ReelsItem item) {
                 if (profileActivity instanceof ProfileActivity) {
                     final ProfileActivity host = (ProfileActivity) profileActivity;
-                    final ShortsActivity viewer = new ShortsActivity(item);
+                    final ReelsViewer viewer = new ReelsViewer(item);
                     host.setReelsViewerActive(true);
                     viewer.setExitAction(() -> host.setReelsViewerActive(false));
                     host.presentFragment(viewer);
@@ -3894,7 +3894,7 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
     public void onProfileReelPicked(Uri uri) {
         if (uri == null || profileActivity == null || dialog_id != UserConfig.getInstance(profileActivity.getCurrentAccount()).getClientUserId()) return;
         final int account = profileActivity.getCurrentAccount();
-        new ShortsProfileReelUploader(profileActivity.getParentActivity(), account, uri, () -> {
+        new ReelsUploadController(profileActivity.getParentActivity(), account, uri, () -> {
             for (MediaPage page : mediaPages) {
                 if (page != null && page.profileReelsView != null) page.profileReelsView.reload();
             }
@@ -7215,7 +7215,7 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
             mediaPages[a].listView.setVisibility(View.GONE);
             mediaPages[a].animationSupportingListView.setVisibility(View.GONE);
             if (mediaPages[a].fastScrollHintView != null) mediaPages[a].fastScrollHintView.setVisibility(View.GONE);
-            final ShortsProfileReelsView reelsView = ensureProfileReelsView(mediaPages[a]);
+            final ReelsProfileGridView reelsView = ensureProfileReelsView(mediaPages[a]);
             if (reelsView != null) reelsView.setVisibility(View.VISIBLE);
             return;
         }

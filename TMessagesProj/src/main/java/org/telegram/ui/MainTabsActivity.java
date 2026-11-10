@@ -953,7 +953,7 @@ public class MainTabsActivity extends ViewPagerActivity implements NotificationC
     protected BaseFragment createBaseFragmentAt(int position) {
         final int tabId = tabAtPosition(position);
         if (tabId == TAB_REELS) {
-            final org.telegram.ui.Components.Shorts.ShortsActivity reels = new org.telegram.ui.Components.Shorts.ShortsActivity();
+            final org.telegram.ui.Components.Reels.ReelsViewer reels = new org.telegram.ui.Components.Reels.ReelsViewer();
             reels.setHomeAction(() -> {
                 final int chatsPosition = positionForTab(TAB_CHATS);
                 if (viewPager != null && chatsPosition >= 0) {
