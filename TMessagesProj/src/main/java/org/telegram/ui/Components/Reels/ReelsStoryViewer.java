@@ -15,6 +15,7 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.PopupMenu;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.viewpager.widget.PagerAdapter;
@@ -402,7 +403,6 @@ public final class ReelsStoryViewer extends BaseFragment implements ReelsStoryPa
         super.onFragmentDestroy();
     }
 
-    @Override
     public boolean onBackPressed() {
         closeViewer();
         return true;
@@ -481,7 +481,7 @@ public final class ReelsStoryViewer extends BaseFragment implements ReelsStoryPa
         try {
             getParentActivity().startActivityForResult(intent, REQUEST_PICK_GIF);
         } catch (Exception ignored) {
-            AndroidUtilities.makeToast("No GIF picker is available.");
+            Toast.makeText(getParentActivity(), "No GIF picker is available.", Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -498,7 +498,7 @@ public final class ReelsStoryViewer extends BaseFragment implements ReelsStoryPa
                     if (pendingGifSheet != null) pendingGifSheet.onGifPicked(out.toByteArray());
                 }
             } catch (Exception ignored) {
-                AndroidUtilities.makeToast("The selected GIF could not be read.");
+                Toast.makeText(getParentActivity(), "The selected GIF could not be read.", Toast.LENGTH_SHORT).show();
             }
             pendingGifSheet = null;
         } else {
@@ -529,7 +529,7 @@ public final class ReelsStoryViewer extends BaseFragment implements ReelsStoryPa
                 .getSystemService(Context.CLIPBOARD_SERVICE);
         if (clipboard != null) {
             clipboard.setPrimaryClip(ClipData.newPlainText("Reel", link));
-            AndroidUtilities.makeToast("Link copied");
+            Toast.makeText(getParentActivity(), "Link copied", Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -634,7 +634,7 @@ public final class ReelsStoryViewer extends BaseFragment implements ReelsStoryPa
     }
 
     private int dp(float value) {
-        return Math.round(value * getResources().getDisplayMetrics().density);
+        return AndroidUtilities.dp(value);
     }
 
     private final class ReelsPagerAdapter extends PagerAdapter {

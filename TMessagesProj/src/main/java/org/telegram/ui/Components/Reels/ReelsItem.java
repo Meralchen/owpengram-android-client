@@ -66,13 +66,13 @@ public final class ReelsItem {
         }
         final String source = object.optString("source", "profile");
         if (!"profile".equals(source) || id.startsWith("channel:")) {
-            FileLog.w("Reels", "Ignoring non-profile Reel " + id);
+            FileLog.w("Ignoring non-profile Reel " + id);
             return null;
         }
 
         final String mediaUrl = ReelsBackendApi.absoluteUrl(account, object.optString("mediaUrl", null));
         if (TextUtils.isEmpty(mediaUrl)) {
-            FileLog.w("Reels", "Ignoring Reel without public media " + id);
+            FileLog.w("Ignoring Reel without public media " + id);
             return null;
         }
 
@@ -90,7 +90,7 @@ public final class ReelsItem {
             userId = object.optLong("userId", 0);
         }
         if (TextUtils.isEmpty(username)) {
-            FileLog.w("Reels", "Ignoring profile Reel without an owner " + id);
+            FileLog.w("Ignoring profile Reel without an owner " + id);
             return null;
         }
 

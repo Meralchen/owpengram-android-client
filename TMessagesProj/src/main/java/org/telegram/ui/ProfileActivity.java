@@ -13032,12 +13032,6 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
 
     @Override
     public void onActivityResultFragment(int requestCode, int resultCode, Intent data) {
-        if (requestCode == SharedMediaLayout.REQUEST_PROFILE_REEL) {
-            if (resultCode == android.app.Activity.RESULT_OK && data != null && sharedMediaLayout != null) {
-                sharedMediaLayout.onProfileReelPicked(data.getData());
-            }
-            return;
-        }
         if (imageUpdater != null) {
             imageUpdater.onActivityResult(requestCode, resultCode, data);
         }

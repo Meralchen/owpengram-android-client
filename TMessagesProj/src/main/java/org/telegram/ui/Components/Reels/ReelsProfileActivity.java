@@ -121,7 +121,7 @@ public final class ReelsProfileActivity extends BaseFragment {
             } catch (Exception ignore) {
             }
             if (error != null) {
-                AndroidUtilities.makeToast(error);
+                Toast.makeText(getParentActivity(), error, Toast.LENGTH_SHORT).show();
                 return;
             }
             if (grid != null) grid.refresh();
@@ -138,6 +138,6 @@ public final class ReelsProfileActivity extends BaseFragment {
     }
 
     private int dp(float value) {
-        return Math.round(value * getResources().getDisplayMetrics().density);
+        return AndroidUtilities.dp(value);
     }
 }
