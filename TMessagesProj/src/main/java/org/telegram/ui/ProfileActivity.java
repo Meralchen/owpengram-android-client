@@ -2535,14 +2535,19 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
         }
 
 
-        actionBar.createMenu().addItem(0x52454c53, R.drawable.msg_video)
-                .setOnClickListener(v -> {
-                    final TLRPC.UserFull info = getUserInfo();
-                    if (info != null && info.user != null
-                            && !android.text.TextUtils.isEmpty(info.user.username)) {
-                        presentFragment(new org.telegram.ui.Components.Reels.ReelsProfileActivity(info.user.username));
-                    }
-                });
+        // Reels are profile-owned: a channel or group has no Reels surface, so
+        // the entry point must not be offered on their profile at all instead
+        // of appearing and then doing nothing when tapped.
+        if (userId != 0) {
+            actionBar.createMenu().addItem(0x52454c53, R.drawable.msg_video)
+                    .setOnClickListener(v -> {
+                        final TLRPC.UserFull info = getUserInfo();
+                        if (info != null && info.user != null
+                                && !android.text.TextUtils.isEmpty(info.user.username)) {
+                            presentFragment(new org.telegram.ui.Components.Reels.ReelsProfileActivity(info.user.username));
+                        }
+                    });
+        }
         return actionBar;
     }
 
