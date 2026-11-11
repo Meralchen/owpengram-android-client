@@ -471,6 +471,10 @@ public final class ReelsRepository {
             callback.onComment(null, new ReelsError(400, "This Reel is unavailable."));
             return;
         }
+        if (!item.commentsEnabled) {
+            callback.onComment(null, new ReelsError(403, "Comments are turned off."));
+            return;
+        }
         final JSONObject body = new JSONObject();
         try {
             body.put("text", text == null ? "" : text);

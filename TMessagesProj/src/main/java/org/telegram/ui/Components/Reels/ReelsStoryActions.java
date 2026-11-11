@@ -85,8 +85,15 @@ public final class ReelsStoryActions extends LinearLayout {
             captionView.setText(item.caption);
         }
         update(item);
-        replyView.setText(own ? "Add a comment…" : "Reply to @" + item.ownerUsername + "…");
-        replyView.setContentDescription("Open comments");
+        if (item.commentsEnabled) {
+            replyView.setText(own ? "Add a comment…" : "Reply to @" + item.ownerUsername + "…");
+            replyView.setContentDescription("Open comments");
+        } else {
+            replyView.setText("Comments are turned off.");
+            replyView.setContentDescription("Comments are turned off");
+        }
+        replyView.setEnabled(item.commentsEnabled);
+        replyView.setAlpha(item.commentsEnabled ? 1f : 0.55f);
     }
 
     public void update(ReelsItem item) {

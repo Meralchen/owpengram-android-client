@@ -28,6 +28,9 @@ public final class ReelsComment {
     public boolean liked;
     public boolean pinned;
     public int replyCount;
+    public boolean canDelete;
+    public boolean canPin;
+    public boolean canReply;
 
     private ReelsComment(long id, long userId, String username, String displayName, String text,
                          long parentId, String gifId, String gifUrl, int gifWidth, int gifHeight,
@@ -83,6 +86,9 @@ public final class ReelsComment {
         comment.likes = Math.max(0, object.optLong("likes", 0));
         comment.liked = object.optBoolean("liked", false);
         comment.replyCount = Math.max(0, object.optInt("replyCount", 0));
+        comment.canDelete = object.optBoolean("canDelete", false);
+        comment.canPin = object.optBoolean("canPin", false);
+        comment.canReply = object.optBoolean("canReply", false);
         return comment;
     }
 

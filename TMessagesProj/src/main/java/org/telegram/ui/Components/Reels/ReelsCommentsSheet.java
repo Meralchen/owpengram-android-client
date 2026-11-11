@@ -18,8 +18,6 @@ import android.widget.TextView;
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.LocaleController;
 import org.telegram.messenger.R;
-import org.telegram.messenger.UserConfig;
-import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.ActionBar.BottomSheet;
 import org.telegram.ui.ActionBar.Theme;
 
@@ -46,6 +44,7 @@ public final class ReelsCommentsSheet extends BottomSheet {
     private final Theme.ResourcesProvider provider;
     private final LinearLayout content;
     private final ScrollView scrollView;
+    private final LinearLayout inputRow;
     private final EditText input;
     private final TextView sendView;
     private final TextView gifView;
@@ -128,9 +127,19 @@ public final class ReelsCommentsSheet extends BottomSheet {
         statusView.setVisibility(View.GONE);
         footer.addView(statusView);
 
-        final LinearLayout inputRow = new LinearLayout(context);
+        final TextView commentsOffView = new TextView(context);
+        commentsOffView.setText("Comments are turned off.");
+        commentsOffView.setTextColor(ReelsTheme.dialogSecondary(provider));
+        commentsOffView.setTextSize(12);
+        commentsOffView.setGravity(Gravity.CENTER_VERTICAL);
+        commentsOffView.setPadding(0, dp(8), 0, dp(8));
+        commentsOffView.setVisibility(item.commentsEnabled ? View.GONE : View.VISIBLE);
+        footer.addView(commentsOffView);
+
+        inputRow = new LinearLayout(context);
         inputRow.setOrientation(LinearLayout.HORIZONTAL);
         inputRow.setGravity(Gravity.CENTER_VERTICAL);
+        inputRow.setVisibility(item.commentsEnabled ? View.VISIBLE : View.GONE);
         footer.addView(inputRow, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
 
@@ -177,6 +186,10 @@ public final class ReelsCommentsSheet extends BottomSheet {
 
     /** Called by the host fragment after the local image picker returns raw GIF bytes. */
     public void onGifPicked(byte[] bytes) {
+        if (!item.commentsEnabled) {
+            showStatus("Comments are turned off.");
+            return;
+        }
         if (bytes == null || bytes.length == 0) {
             showStatus("No GIF was selected.");
             return;
@@ -214,7 +227,7 @@ public final class ReelsCommentsSheet extends BottomSheet {
 
     private void updateComposerState() {
         final boolean hasGif = !TextUtils.isEmpty(pendingGifId) || !TextUtils.isEmpty(pendingGifUrl);
-        sendView.setEnabled(!sending && (hasGif || input.getText().length() > 0));
+        sendView.setEnabled(item.commentsEnabled && !sending && (hasGif || input.getText().length() > 0));
         sendView.setAlpha(sendView.isEnabled() ? 1f : 0.45f);
     }
 
@@ -342,7 +355,7 @@ public final class ReelsCommentsSheet extends BottomSheet {
         }));
         actions.addView(like);
 
-        if (!reply) {
+        if (!reply && comment.canReply) {
             final TextView replyButton = pill(getContext(), "Reply", ReelsTheme.dialogSecondary(provider));
             replyButton.setOnClickListener(v -> beginReply(comment));
             final LinearLayout.LayoutParams replyParams = new LinearLayout.LayoutParams(
@@ -351,13 +364,15 @@ public final class ReelsCommentsSheet extends BottomSheet {
             actions.addView(replyButton, replyParams);
         }
 
-        final TextView more = pill(getContext(), "•••", ReelsTheme.dialogSecondary(provider));
-        more.setContentDescription("Comment actions");
-        more.setOnClickListener(v -> showCommentMenu(more, comment));
-        final LinearLayout.LayoutParams moreParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, dp(30));
-        moreParams.setMarginStart(dp(7));
-        actions.addView(more, moreParams);
+        if (comment.canDelete || comment.canPin) {
+            final TextView more = pill(getContext(), "•••", ReelsTheme.dialogSecondary(provider));
+            more.setContentDescription("Comment actions");
+            more.setOnClickListener(v -> showCommentMenu(more, comment));
+            final LinearLayout.LayoutParams moreParams = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, dp(30));
+            moreParams.setMarginStart(dp(7));
+            actions.addView(more, moreParams);
+        }
 
         content.addView(row, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -421,6 +436,10 @@ public final class ReelsCommentsSheet extends BottomSheet {
     }
 
     private void beginReply(ReelsComment comment) {
+        if (!item.commentsEnabled || !comment.canReply) {
+            showStatus("Replies are turned off.");
+            return;
+        }
         replyTarget = comment;
         input.setHint("Reply to @" + (comment.username == null ? comment.displayNameOrUsername() : comment.username));
         input.requestFocus();
@@ -430,7 +449,7 @@ public final class ReelsCommentsSheet extends BottomSheet {
     }
 
     private void post() {
-        if (sending) return;
+        if (!item.commentsEnabled || sending) return;
         final String text = input.getText().toString().trim();
         if (TextUtils.isEmpty(text) && TextUtils.isEmpty(pendingGifId) && TextUtils.isEmpty(pendingGifUrl)) {
             return;
@@ -461,10 +480,9 @@ public final class ReelsCommentsSheet extends BottomSheet {
     }
 
     private void showCommentMenu(View anchor, ReelsComment comment) {
-        final long currentUserId = currentUserId();
-        final boolean owner = currentUserId != 0 && currentUserId == item.ownerUserId;
-        final boolean canDelete = currentUserId != 0 && (currentUserId == comment.userId || owner);
-        final boolean canPin = owner && comment.parentId == 0;
+        final boolean canDelete = comment.canDelete;
+        final boolean canPin = comment.canPin && comment.parentId == 0;
+        if (!canDelete && !canPin) return;
         final PopupMenu popup = new PopupMenu(getContext(), anchor);
         if (canPin) {
             popup.getMenu().add(0, 1, 0, comment.pinned ? "Unpin comment" : "Pin comment");
@@ -496,11 +514,6 @@ public final class ReelsCommentsSheet extends BottomSheet {
             return false;
         });
         popup.show();
-    }
-
-    private long currentUserId() {
-        final TLRPC.User user = UserConfig.getInstance(account).getCurrentUser();
-        return user == null ? 0 : user.id;
     }
 
     private void updateTitle() {
