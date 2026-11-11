@@ -26,6 +26,20 @@ public final class ReelsError {
         return status == 404;
     }
 
+    /**
+     * The server could not decode reels.* at the negotiated layer: either the
+     * backend predates the Reels namespace or this session's layer evidence is
+     * older than the one that introduced it. Both are recoverable by the
+     * operator/relogin, never by the viewer.
+     */
+    public boolean isUnavailable() {
+        return status == 501 || isLayerMismatch();
+    }
+
+    private boolean isLayerMismatch() {
+        return status == 400 && message != null && message.contains("CONNECTION_LAYER_INVALID");
+    }
+
     public static ReelsError network() {
         return new ReelsError(0, null);
     }
@@ -52,6 +66,44 @@ public final class ReelsError {
         if (isNotFound()) {
             return "This Reel is no longer available.";
         }
-        return message != null && message.length() > 0 ? message : "Something went wrong.";
+        if (isUnavailable()) {
+            return "Reels is not available on this server yet.";
+        }
+        if (isRateLimited()) {
+            return "Too many requests. Wait a moment and try again.";
+        }
+        return userMessage() != null ? userMessage() : "Something went wrong.";
+    }
+
+    /**
+     * TL error texts are protocol identifiers (CONNECTION_LAYER_INVALID,
+     * FLOOD_WAIT_3), not copy. Only pass through a server sentence a person
+     * could have written; anything identifier-shaped becomes generic.
+     */
+    private String userMessage() {
+        if (message == null) {
+            return null;
+        }
+        final String text = message.trim();
+        if (text.length() < 4 || text.length() > 140) {
+            return null;
+        }
+        if (text.indexOf('_') >= 0) {
+            return null;
+        }
+        for (int i = 0; i < text.length(); i++) {
+            final char c = text.charAt(i);
+            if (Character.isLetter(c) && !Character.isLowerCase(c) && !Character.isUpperCase(c)) {
+                return null;
+            }
+            if (Character.isUpperCase(c) && i > 0 && Character.isUpperCase(text.charAt(i - 1))) {
+                return null;
+            }
+        }
+        return text;
+    }
+
+    private boolean isRateLimited() {
+        return status == 420 || status == 429;
     }
 }
