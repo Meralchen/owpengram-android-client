@@ -2,7 +2,6 @@ package org.telegram.ui.Components.Reels;
 
 import android.content.Context;
 import android.content.Intent;
-import android.graphics.Color;
 import android.graphics.PorterDuff;
 import android.graphics.PorterDuffColorFilter;
 import android.os.Bundle;
@@ -14,6 +13,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
+import android.widget.LinearLayout;
 import android.widget.PopupMenu;
 import android.widget.TextView;
 
@@ -28,7 +28,6 @@ import org.telegram.messenger.LocaleController;
 import org.telegram.messenger.MessagesController;
 import org.telegram.messenger.NotificationCenter;
 import org.telegram.messenger.R;
-import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.ActionBar.BaseFragment;
 import org.telegram.ui.ChatActivity;
 import org.telegram.ui.Components.BulletinFactory;
@@ -43,13 +42,17 @@ import java.util.HashSet;
 
 /**
  * Fullscreen vertical Reels feed: swipe up for the next clip, swipe down for the previous one.
- * Chrome follows Telegram's media viewer (black stage, white controls) and shares the app theme
- * through {@link ReelsTheme}; the rest of the app keeps its normal theme colours.
+ * Global feeds support For You / Following; a viewer opened from a profile stays inside that
+ * creator. Channel placeholders are resolved lazily around the current page.
  */
 public class ReelsViewer extends BaseFragment implements NotificationCenter.NotificationCenterDelegate,
         ReelsPageView.Delegate, ReelsViewPager.Listener, MainTabsActivity.TabFragmentDelegate {
 
+    /** Session-only feed mode, remembered per process like the other Reels surface state. */
+    private static String sessionFeedMode = ReelsRepository.MODE_FOR_YOU;
+
     private final ReelsItem startItem;
+    private final String profileUsername;
     private ReelsRepository repository;
     private ReelsPlayerPool playerPool;
     private final ArrayList<ReelsItem> items = new ArrayList<>();
@@ -63,20 +66,29 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
     private ImageView muteButton;
     private ImageView moreButton;
     private TextView titleView;
+    private LinearLayout feedTabs;
+    private TextView forYouTab;
+    private TextView followingTab;
     private int currentPage = RecyclerView.NO_POSITION;
     private boolean paused = true;
     private boolean muted;
+    private boolean seeded;
     private Runnable hideEndMessage;
     private Runnable homeAction;
     private Runnable exitAction;
 
     public ReelsViewer() {
-        this(null);
+        this(null, null);
     }
 
     public ReelsViewer(ReelsItem startItem) {
+        this(startItem, null);
+    }
+
+    public ReelsViewer(ReelsItem startItem, String profileUsername) {
         super();
         this.startItem = startItem;
+        this.profileUsername = profileUsername;
         if (startItem != null) {
             currentAccount = startItem.account;
         }
@@ -87,14 +99,17 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
     }
 
     private static String key(ReelsItem item) {
-        return item.source == ReelsItem.Source.PROFILE
-                ? "profile_" + item.reelId
-                : item.getDialogId() + "_" + item.messageId;
+        return item.stableId();
     }
 
     @Override
     public boolean onFragmentCreate() {
         repository = new ReelsRepository(currentAccount);
+        if (!TextUtils.isEmpty(profileUsername)) {
+            repository.setProfile(profileUsername);
+        } else {
+            repository.setMode(sessionFeedMode);
+        }
         playerPool = new ReelsPlayerPool(ApplicationLoader.applicationContext, this::refreshPlayers);
         getNotificationCenter().addObserver(this, NotificationCenter.didUpdateReactions);
         getNotificationCenter().addObserver(this, NotificationCenter.messagesDeleted);
@@ -147,7 +162,6 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
 
         backButton = new ImageView(context);
         backButton.setImageResource(R.drawable.ic_ab_back);
-        backButton.setColorFilter(new PorterDuffColorFilter(ReelsTheme.viewerPrimary, PorterDuff.Mode.SRC_IN));
         backButton.setContentDescription(LocaleController.getString(R.string.Back));
         backButton.setPadding(AndroidUtilities.dp(12), AndroidUtilities.dp(12), AndroidUtilities.dp(12), AndroidUtilities.dp(12));
         backButton.setOnClickListener(v -> handleBackNavigation());
@@ -156,7 +170,6 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
 
         titleView = new TextView(context);
         titleView.setText(LocaleController.getString(R.string.ShortsTitle));
-        titleView.setTextColor(ReelsTheme.viewerPrimary);
         titleView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 18);
         titleView.setTypeface(AndroidUtilities.bold());
         titleView.setGravity(Gravity.CENTER);
@@ -164,6 +177,16 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
         titleView.setSingleLine(true);
         root.addView(titleView, LayoutHelper.createFrame(LayoutHelper.WRAP_CONTENT, ReelsTheme.touchTarget,
                 Gravity.TOP | Gravity.CENTER_HORIZONTAL, 0, topOffset, 0, 0));
+
+        feedTabs = new LinearLayout(context);
+        feedTabs.setOrientation(LinearLayout.HORIZONTAL);
+        feedTabs.setGravity(Gravity.CENTER);
+        forYouTab = createFeedTab(context, LocaleController.getString(R.string.ShortsForYou), ReelsRepository.MODE_FOR_YOU);
+        followingTab = createFeedTab(context, LocaleController.getString(R.string.ShortsFollowing), ReelsRepository.MODE_FOLLOWING);
+        feedTabs.addView(forYouTab);
+        feedTabs.addView(followingTab, LayoutHelper.createLinear(LayoutHelper.WRAP_CONTENT, 32, 0, 0, 4, 0));
+        root.addView(feedTabs, LayoutHelper.createFrame(LayoutHelper.WRAP_CONTENT, 32,
+                Gravity.TOP | Gravity.CENTER_HORIZONTAL, 0, topOffset + 42, 0, 0));
 
         muteButton = new ImageView(context);
         muteButton.setPadding(AndroidUtilities.dp(12), AndroidUtilities.dp(12), AndroidUtilities.dp(12), AndroidUtilities.dp(12));
@@ -173,7 +196,6 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
 
         moreButton = new ImageView(context);
         moreButton.setImageResource(R.drawable.ic_ab_other);
-        moreButton.setColorFilter(new PorterDuffColorFilter(ReelsTheme.viewerPrimary, PorterDuff.Mode.SRC_IN));
         moreButton.setContentDescription(LocaleController.getString(R.string.AccDescrMoreOptions));
         moreButton.setPadding(AndroidUtilities.dp(12), AndroidUtilities.dp(12), AndroidUtilities.dp(12), AndroidUtilities.dp(12));
         moreButton.setOnClickListener(this::showMoreMenu);
@@ -182,8 +204,52 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
 
         fragmentView = root;
         updateChromeColors();
+        if (!TextUtils.isEmpty(profileUsername)) {
+            titleView.setText("@" + profileUsername);
+            feedTabs.setVisibility(View.GONE);
+        }
         initFeed();
         return fragmentView;
+    }
+
+    private TextView createFeedTab(Context context, String text, String mode) {
+        final TextView tab = new TextView(context);
+        tab.setText(text);
+        tab.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 14);
+        tab.setTypeface(AndroidUtilities.bold());
+        tab.setGravity(Gravity.CENTER);
+        tab.setPadding(AndroidUtilities.dp(14), 0, AndroidUtilities.dp(14), 0);
+        tab.setMinimumHeight(AndroidUtilities.dp(32));
+        tab.setOnClickListener(v -> switchMode(mode));
+        return tab;
+    }
+
+    private void updateFeedTabs() {
+        if (forYouTab == null || followingTab == null || repository == null) return;
+        final boolean forYou = !ReelsRepository.MODE_FOLLOWING.equals(repository.getMode());
+        styleFeedTab(forYouTab, forYou);
+        styleFeedTab(followingTab, !forYou);
+    }
+
+    private void styleFeedTab(TextView tab, boolean selected) {
+        tab.setTextColor(selected ? ReelsTheme.viewerPrimary : ReelsTheme.viewerSecondary);
+        tab.setBackground(selected ? ReelsTheme.rounded(0x2EFFFFFF, 16) : null);
+    }
+
+    private void switchMode(String mode) {
+        if (repository == null || mode.equals(repository.getMode())) return;
+        sessionFeedMode = mode;
+        repository.setMode(mode);
+        items.clear();
+        itemKeys.clear();
+        currentPage = RecyclerView.NO_POSITION;
+        if (playerPool != null) {
+            playerPool.release();
+        }
+        adapter.notifyDataSetChanged();
+        emptyView.setVisibility(View.GONE);
+        updateFeedTabs();
+        loadPage();
     }
 
     private void updateChromeColors() {
@@ -207,6 +273,7 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
         if (progressView != null) {
             progressView.setProgressColor(ReelsTheme.viewerPrimary);
         }
+        updateFeedTabs();
     }
 
     private void toggleMute() {
@@ -242,7 +309,8 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
         itemKeys.clear();
         currentPage = RecyclerView.NO_POSITION;
         repository.resetFeed();
-        if (startItem != null) {
+        if (startItem != null && !seeded) {
+            seeded = true;
             items.add(startItem);
             itemKeys.add(key(startItem));
             repository.startAfter(startItem);
@@ -284,7 +352,9 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
             }
             if (items.isEmpty()) {
                 emptyView.setVisibility(View.VISIBLE);
-                emptyView.setText(LocaleController.getString(R.string.ShortsEmpty));
+                emptyView.setText(LocaleController.getString(
+                        ReelsRepository.MODE_FOLLOWING.equals(repository.getMode())
+                                ? R.string.ShortsFollowingEmpty : R.string.ShortsEmpty));
                 emptyView.setOnClickListener(null);
             } else {
                 emptyView.setVisibility(View.GONE);
@@ -293,6 +363,7 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
                     pager.setCurrentPage(0, false);
                     updateControlsForPage(0);
                 }
+                resolveAround(currentPage);
             }
             refreshPlayers();
         });
@@ -325,6 +396,7 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
         }
         currentPage = position;
         updateControlsForPage(position);
+        resolveAround(position);
         refreshPlayers();
         if (position >= items.size() - 3) {
             loadPage();
@@ -332,6 +404,18 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
         if (position == items.size() - 1 && repository.isEndReached()) {
             showEndMessage();
         }
+    }
+
+    private void resolveAround(int position) {
+        if (repository == null || position < 0) return;
+        repository.resolveChannelAround(items, position, item -> {
+            if (item == null) return;
+            final int index = items.indexOf(item);
+            if (index >= 0) {
+                adapter.notifyItemChanged(index);
+                refreshPlayers();
+            }
+        });
     }
 
     private void updateControlsForPage(int position) {
@@ -389,12 +473,19 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
         final PopupMenu menu = new PopupMenu(anchor.getContext(), anchor);
         menu.getMenu().add(0, 1, 0, LocaleController.getString(R.string.CopyLink));
         menu.getMenu().add(0, 2, 0, LocaleController.getString(R.string.ShareFile));
+        menu.getMenu().add(0, 3, 0, LocaleController.getString(R.string.ShortsSaved));
         menu.setOnMenuItemClickListener(menuItem -> {
             if (menuItem.getItemId() == 1) {
                 copyLink(item);
                 return true;
             } else if (menuItem.getItemId() == 2) {
                 onShare(null);
+                return true;
+            } else if (menuItem.getItemId() == 3) {
+                if (getParentActivity() != null) {
+                    new ReelsSavedSheet(getParentActivity(), currentAccount, resourceProvider,
+                            saved -> presentFragment(new ReelsViewer(saved))).show();
+                }
                 return true;
             }
             return false;
@@ -428,18 +519,20 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
         });
     }
 
-    private void shareProfileItem(ReelsItem item) {
+    private boolean shareProfileItem(ReelsItem item) {
         final String url = shareUrl(item);
         if (url == null || getParentActivity() == null) {
-            return;
+            return false;
         }
         final Intent intent = new Intent(Intent.ACTION_SEND);
         intent.setType("text/plain");
         intent.putExtra(Intent.EXTRA_TEXT, url);
         try {
             getParentActivity().startActivity(Intent.createChooser(intent, LocaleController.getString(R.string.ShareFile)));
+            return true;
         } catch (Exception ignore) {
             copyLink(item);
+            return false;
         }
     }
 
@@ -455,6 +548,24 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
     }
 
     @Override
+    public void onToggleSave(ReelsPageView page) {
+        final ReelsItem item = page != null ? page.getItem() : (currentPage >= 0 && currentPage < items.size() ? items.get(currentPage) : null);
+        if (item == null) return;
+        repository.setSaved(item, !item.saved, (updatedItem, error) -> {
+            if (page != null) page.updateCounters();
+        });
+        if (page != null) page.updateCounters();
+    }
+
+    @Override
+    public void onView(ReelsPageView page, long positionMs, boolean completed) {
+        final ReelsItem item = page != null ? page.getItem() : (currentPage >= 0 && currentPage < items.size() ? items.get(currentPage) : null);
+        if (item != null) {
+            repository.reportView(item, positionMs, completed);
+        }
+    }
+
+    @Override
     public void onOpenComments(ReelsPageView page) {
         final ReelsItem item = page != null ? page.getItem() : (currentPage >= 0 && currentPage < items.size() ? items.get(currentPage) : null);
         if (item != null) openComments(item);
@@ -463,7 +574,11 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
     private void openComments(ReelsItem item) {
         if (getParentActivity() == null) return;
         if (item.source == ReelsItem.Source.PROFILE) {
-            new ReelsProfileCommentsSheet(getParentActivity(), item, resourceProvider).show();
+            new ReelsProfileCommentsSheet(getParentActivity(), item, resourceProvider, () -> {
+                if (adapter != null && currentPage >= 0 && currentPage < items.size()) {
+                    adapter.notifyItemChanged(currentPage);
+                }
+            }).show();
         } else {
             new ReelsCommentsSheet(getParentActivity(), repository, item, resourceProvider).show();
         }
@@ -475,8 +590,10 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
         final ReelsItem item = items.get(currentPage);
         if (item.source == ReelsItem.Source.CHANNEL && item.messageObject != null) {
             showDialog(new ShareAlert(getParentActivity(), new ArrayList<>(Collections.singletonList(item.messageObject)), null, false, null, false));
-        } else {
-            shareProfileItem(item);
+        } else if (shareProfileItem(item)) {
+            repository.reportShare(item, (updated, error) -> {
+                if (page != null) page.updateCounters();
+            });
         }
     }
 
@@ -485,6 +602,7 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
         final ReelsItem item = page != null ? page.getItem() : (currentPage >= 0 && currentPage < items.size() ? items.get(currentPage) : null);
         if (item == null) return;
         if (item.source == ReelsItem.Source.CHANNEL) {
+            if (item.channelId == 0) return;
             final Bundle args = new Bundle();
             args.putLong("chat_id", item.channelId);
             presentFragment(new ChatActivity(args));

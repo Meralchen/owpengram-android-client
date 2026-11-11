@@ -62,7 +62,7 @@ public final class ReelsProfileGridView extends FrameLayout implements Notificat
     private final ArrayList<Entry> entries = new ArrayList<>();
     private final RecyclerView grid;
     private final TextView stateView;
-    private final TextView uploadButton;
+    private final ReelsCreatorHeader creatorHeader;
     private final Adapter adapter = new Adapter();
     private int nextOffset;
     private boolean endReached;
@@ -95,7 +95,8 @@ public final class ReelsProfileGridView extends FrameLayout implements Notificat
                 if (manager != null && manager.findLastVisibleItemPosition() >= entries.size() - 4) loadNextPage();
             }
         });
-        addView(grid, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
+        addView(grid, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT,
+                Gravity.TOP, 0, 60, 0, 0));
 
         stateView = new TextView(context);
         stateView.setGravity(Gravity.CENTER);
@@ -103,16 +104,10 @@ public final class ReelsProfileGridView extends FrameLayout implements Notificat
         stateView.setPadding(AndroidUtilities.dp(24), AndroidUtilities.dp(24), AndroidUtilities.dp(24), AndroidUtilities.dp(24));
         addView(stateView, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, Gravity.CENTER));
 
-        uploadButton = new TextView(context);
-        uploadButton.setText(LocaleController.getString(R.string.ShortsUploadReel));
-        uploadButton.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 13);
-        uploadButton.setTypeface(AndroidUtilities.bold());
-        uploadButton.setGravity(Gravity.CENTER);
-        uploadButton.setPadding(AndroidUtilities.dp(16), AndroidUtilities.dp(8), AndroidUtilities.dp(16), AndroidUtilities.dp(8));
-        uploadButton.setMinimumHeight(AndroidUtilities.dp(36));
-        uploadButton.setOnClickListener(v -> delegate.onUpload());
-        addView(uploadButton, LayoutHelper.createFrame(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT,
-                Gravity.TOP | Gravity.RIGHT, 0, 10, 12, 0));
+        creatorHeader = new ReelsCreatorHeader(context, account, username, ownProfile, provider,
+                () -> delegate.onUpload());
+        creatorHeader.setVisibility(TextUtils.isEmpty(username) ? View.GONE : View.VISIBLE);
+        addView(creatorHeader, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 60, Gravity.TOP));
         updateThemeColors();
 
         loadNextPage();
@@ -123,9 +118,6 @@ public final class ReelsProfileGridView extends FrameLayout implements Notificat
         setBackgroundColor(bg);
         grid.setBackgroundColor(bg);
         stateView.setTextColor(ReelsTheme.textSecondary(provider));
-        uploadButton.setTextColor(ReelsTheme.accentText(provider));
-        uploadButton.setBackground(ReelsTheme.rounded(ReelsTheme.accent(provider), 18));
-        uploadButton.setVisibility(ownProfile ? View.VISIBLE : View.GONE);
     }
 
     public void scrollToTop() {

@@ -11,8 +11,9 @@ import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.Components.VideoPlayer;
 
 /**
- * A Reel is either a channel message or a profile-owned REST record. Only channel items
- * have a channel/message identity; profile items use their opaque Reel ID.
+ * A Reel is either a channel message or a profile-owned REST record. Channel items arrive from
+ * the feed unresolved and are filled in lazily around the visible page; profile items use their
+ * opaque server Reel ID.
  */
 public final class ReelsItem {
 
@@ -22,30 +23,46 @@ public final class ReelsItem {
 
     public final int account;
     public final Source source;
-    public final long channelId;
-    public final int messageId;
-    public final MessageObject messageObject;
-    public final TLRPC.Document document;
+
+    /** Stable server item id: the profile Reel id, or {@code channel:<id>:<messageId>}. */
+    public String id;
+
+    public long channelId;
+    public int messageId;
+    public MessageObject messageObject;
+    public TLRPC.Document document;
+
     public String reelId;
     public String mediaUrl;
     public String thumbnailUrl;
     public String creatorName;
     public String creatorUsername;
-    public String playbackAuthorizationHeader;
+    public long ownerUserId;
+    /** Canonical public-profile API share URL, when this item came from a profile grid. */
+    public String publicShareUrl;
+
+    public String channelUsername;
+    public String channelTitle;
+    private String channelCaption;
+    private double channelDuration;
+    private int channelWidth;
+    private int channelHeight;
+
+    /** Channel item has no document yet; playback/comments wait for lazy resolution. */
+    public boolean resolved;
+
     private String profileCaption;
     private double profileDuration;
     private int profileWidth;
     private int profileHeight;
-    /** Canonical public-profile API share URL, when this item came from a profile grid. */
-    public String publicShareUrl;
-
-    /** next_rate or cursor marker. */
-    public int pageRate;
 
     public boolean liked;
     public int likes;
     public int views;
     public int comments;
+    public int saves;
+    public int shares;
+    public boolean saved;
     public boolean commentsEnabled;
 
     /** Position the user last watched, restored when the page comes back. */
@@ -56,19 +73,28 @@ public final class ReelsItem {
         this.source = Source.CHANNEL;
         this.channelId = message.peer_id.channel_id;
         this.messageId = message.id;
+        this.id = stableId(channelId, messageId);
         this.messageObject = new MessageObject(account, message, false, false);
         this.document = document;
+        this.resolved = document != null;
         applyMessage(message);
     }
 
     private ReelsItem(int account, String reelId) {
         this.account = account;
         this.source = Source.PROFILE;
-        this.channelId = 0;
-        this.messageId = 0;
-        this.messageObject = null;
-        this.document = null;
         this.reelId = reelId;
+        this.id = reelId;
+        this.commentsEnabled = true;
+    }
+
+    private ReelsItem(int account, String id, long channelId, int messageId) {
+        this.account = account;
+        this.source = Source.CHANNEL;
+        this.id = id;
+        this.channelId = channelId;
+        this.messageId = messageId;
+        this.resolved = false;
         this.commentsEnabled = true;
     }
 
@@ -86,10 +112,10 @@ public final class ReelsItem {
     /** Parses a profile-owned Reel without inventing a channel peer or MTProto message ID. */
     public static ReelsItem fromProfile(int account, JSONObject object) {
         if (object == null) return null;
-        String id = object.optString("id", "");
-        String media = object.optString("mediaUrl", "");
+        final String id = object.optString("id", "");
+        final String media = object.optString("mediaUrl", "");
         if (TextUtils.isEmpty(id) || TextUtils.isEmpty(media)) return null;
-        ReelsItem item = new ReelsItem(account, id);
+        final ReelsItem item = new ReelsItem(account, id);
         item.mediaUrl = ReelsBackendApi.absoluteUrl(account, media);
         item.thumbnailUrl = ReelsBackendApi.absoluteUrl(account, object.optString("thumbnailUrl", null));
         item.profileCaption = object.optString("caption", "");
@@ -99,18 +125,87 @@ public final class ReelsItem {
         item.likes = object.optInt("likes", object.optInt("likeCount", 0));
         item.comments = object.optInt("comments", object.optInt("commentCount", 0));
         item.views = object.optInt("views", object.optInt("viewCount", 0));
+        item.saves = object.optInt("saves", object.optInt("saveCount", 0));
+        item.shares = object.optInt("shares", object.optInt("shareCount", 0));
         item.liked = object.optBoolean("liked", false);
-        JSONObject owner = object.optJSONObject("owner");
-        if (owner == null) owner = object.optJSONObject("creator");
-        if (owner == null) owner = object.optJSONObject("profile");
+        item.saved = object.optBoolean("saved", false);
+        item.commentsEnabled = object.optBoolean("commentsEnabled", true);
+        final JSONObject owner = ownerObject(object);
         if (owner != null) {
             item.creatorName = owner.optString("displayName", owner.optString("name", owner.optString("title", "")));
             item.creatorUsername = owner.optString("username", "");
+            item.ownerUserId = owner.optLong("userId", owner.optLong("id", 0));
         }
         if (TextUtils.isEmpty(item.creatorName)) item.creatorName = object.optString("creatorName", "");
         if (TextUtils.isEmpty(item.creatorUsername)) item.creatorUsername = object.optString("creatorUsername", "");
+        if (item.ownerUserId == 0) item.ownerUserId = object.optLong("ownerUserId", 0);
         item.publicShareUrl = object.optString("shareUrl", "");
         return item.mediaUrl != null ? item : null;
+    }
+
+    /**
+     * Parses a channel item from the feed without blocking on contacts.resolveUsername /
+     * channels.getMessages. The viewer resolves the visible items through {@link #applyResolved}.
+     */
+    public static ReelsItem fromChannelFeed(int account, JSONObject object) {
+        if (object == null) return null;
+        final JSONObject channel = object.optJSONObject("channel");
+        final String serverId = object.optString("id", "");
+        final int messageId = object.optInt("messageId", object.optInt("message_id", parseMessageId(serverId)));
+        final long channelId = object.optLong("channelId", object.optLong("channel_id", parseChannelId(serverId)));
+        final String id = TextUtils.isEmpty(serverId) ? stableId(channelId, messageId) : serverId;
+        if (TextUtils.isEmpty(id) || messageId <= 0) return null;
+
+        final ReelsItem item = new ReelsItem(account, id, channelId, messageId);
+        item.channelUsername = object.optString("channelUsername",
+                channel != null ? channel.optString("username", "") : "");
+        item.channelTitle = object.optString("channelTitle",
+                channel != null ? channel.optString("title", "") : "");
+        item.channelCaption = object.optString("caption", "");
+        item.channelDuration = object.optDouble("duration", 0);
+        item.channelWidth = object.optInt("width", 0);
+        item.channelHeight = object.optInt("height", 0);
+        item.views = object.optInt("views", object.optInt("viewCount", 0));
+        item.likes = object.optInt("likes", object.optInt("likeCount", 0));
+        item.comments = object.optInt("comments", 0);
+        item.likes = object.optInt("likes", item.likes);
+        item.saves = object.optInt("saves", 0);
+        item.shares = object.optInt("shares", 0);
+        item.liked = object.optBoolean("liked", false);
+        item.saved = false;
+        item.commentsEnabled = true;
+        final JSONObject owner = ownerObject(object);
+        if (owner != null) {
+            item.creatorName = owner.optString("displayName", owner.optString("name", owner.optString("title", "")));
+            item.creatorUsername = owner.optString("username", "");
+            item.ownerUserId = owner.optLong("userId", owner.optLong("id", 0));
+        }
+        if (TextUtils.isEmpty(item.creatorName)) item.creatorName = item.channelTitle;
+        if (TextUtils.isEmpty(item.creatorUsername)) item.creatorUsername = item.channelUsername;
+        item.publicShareUrl = object.optString("shareUrl", "");
+        return item;
+    }
+
+    private static JSONObject ownerObject(JSONObject object) {
+        JSONObject owner = object.optJSONObject("owner");
+        if (owner == null) owner = object.optJSONObject("creator");
+        if (owner == null) owner = object.optJSONObject("profile");
+        return owner;
+    }
+
+    /** Copies the resolved MTProto video into this placeholder, preserving server counters. */
+    public void applyResolved(ReelsItem resolvedItem) {
+        if (resolvedItem == null || resolvedItem.source != Source.CHANNEL) return;
+        channelId = resolvedItem.channelId;
+        messageId = resolvedItem.messageId;
+        messageObject = resolvedItem.messageObject;
+        document = resolvedItem.document;
+        resolved = document != null;
+        if (messageObject != null) {
+            applyMessage(messageObject.messageOwner);
+        }
+        if (TextUtils.isEmpty(channelUsername)) channelUsername = resolvedItem.channelUsername;
+        if (TextUtils.isEmpty(channelTitle)) channelTitle = resolvedItem.channelTitle;
     }
 
     /** A regular video document: not a round video, voice note or animated GIF. */
@@ -149,6 +244,36 @@ public final class ReelsItem {
         return messageObject != null ? messageObject.messageOwner : null;
     }
 
+    public String stableId() {
+        if (!TextUtils.isEmpty(id)) return id;
+        return source == Source.CHANNEL ? stableId(channelId, messageId) : reelId;
+    }
+
+    private static String stableId(long channelId, int messageId) {
+        return "channel:" + channelId + ":" + messageId;
+    }
+
+    private static long parseChannelId(String id) {
+        if (id == null || !id.startsWith("channel:")) return 0;
+        final int end = id.indexOf(':', 8);
+        try {
+            return Long.parseLong(end < 0 ? id.substring(8) : id.substring(8, end));
+        } catch (Exception ignore) {
+            return 0;
+        }
+    }
+
+    private static int parseMessageId(String id) {
+        if (id == null || !id.startsWith("channel:")) return 0;
+        final int second = id.indexOf(':', 8);
+        if (second < 0 || second + 1 >= id.length()) return 0;
+        try {
+            return Integer.parseInt(id.substring(second + 1));
+        } catch (Exception ignore) {
+            return 0;
+        }
+    }
+
     public void applyMessage(TLRPC.Message message) {
         if (message == null) return;
         views = message.views;
@@ -182,21 +307,33 @@ public final class ReelsItem {
     }
 
     public double getDuration() {
-        return source == Source.PROFILE ? profileDuration : MessageObject.getDocumentDuration(document);
+        if (source == Source.CHANNEL) {
+            return document != null ? MessageObject.getDocumentDuration(document) : channelDuration;
+        }
+        return profileDuration;
     }
 
     public int getVideoWidth() {
-        return source == Source.PROFILE ? profileWidth : MessageObject.getVideoWidth(document);
+        if (source == Source.CHANNEL) {
+            return document != null ? MessageObject.getVideoWidth(document) : channelWidth;
+        }
+        return profileWidth;
     }
 
     public int getVideoHeight() {
-        return source == Source.PROFILE ? profileHeight : MessageObject.getVideoHeight(document);
+        if (source == Source.CHANNEL) {
+            return document != null ? MessageObject.getVideoHeight(document) : channelHeight;
+        }
+        return profileHeight;
     }
 
     public String getCaption() {
         if (source == Source.PROFILE) return TextUtils.isEmpty(profileCaption) ? null : profileCaption;
-        final String text = getMessage().message;
-        return TextUtils.isEmpty(text) ? null : text;
+        if (messageObject != null) {
+            final String text = messageObject.messageOwner.message;
+            return TextUtils.isEmpty(text) ? null : text;
+        }
+        return TextUtils.isEmpty(channelCaption) ? null : channelCaption;
     }
 
     /**
@@ -205,7 +342,7 @@ public final class ReelsItem {
      * an expired file reference.
      */
     public Uri mtprotoUri() {
-        if (source != Source.CHANNEL) return null;
+        if (source != Source.CHANNEL || document == null || messageObject == null) return null;
         try {
             final int reference = FileLoader.getInstance(account).getFileReference(messageObject);
             return VideoPlayer.VideoUri.getUri(account, document, reference);
@@ -216,8 +353,12 @@ public final class ReelsItem {
     }
 
     public String cacheKey() {
-        return source == Source.PROFILE
-                ? ReelsCache.profileKey(account, reelId)
-                : ReelsCache.channelKey(account, channelId, messageId);
+        if (source == Source.PROFILE) {
+            return ReelsCache.profileKey(account, reelId);
+        }
+        if (channelId > 0 && messageId > 0) {
+            return ReelsCache.channelKey(account, channelId, messageId);
+        }
+        return ReelsCache.keyPrefix(account) + "pending:" + stableId();
     }
 }

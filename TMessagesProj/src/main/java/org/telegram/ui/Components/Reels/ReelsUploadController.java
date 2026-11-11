@@ -9,7 +9,9 @@ import android.net.Uri;
 import android.provider.OpenableColumns;
 import android.text.TextUtils;
 import android.widget.EditText;
+import android.widget.LinearLayout;
 import android.widget.ProgressBar;
+import android.widget.SeekBar;
 import android.widget.TextView;
 
 import org.json.JSONException;
@@ -47,6 +49,7 @@ public final class ReelsUploadController {
     private int height;
     private String mimeType;
     private String caption = "";
+    private int coverTimeMs = 1000;
     private String uploadId;
     private String ticket;
     private InputStream input;
@@ -112,11 +115,41 @@ public final class ReelsUploadController {
     private void showCaptionEditor() {
         final EditText input = new EditText(context);
         input.setHint(LocaleController.getString(R.string.ShortsUploadCaption));
+
+        final LinearLayout content = new LinearLayout(context);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(AndroidUtilities.dp(24), 0, AndroidUtilities.dp(24), 0);
+        content.addView(input);
+
+        final TextView coverLabel = new TextView(context);
+        coverLabel.setTextSize(android.util.TypedValue.COMPLEX_UNIT_DIP, 13);
+        coverLabel.setTextColor(ReelsTheme.textSecondary(null));
+        coverLabel.setPadding(0, AndroidUtilities.dp(14), 0, 0);
+        content.addView(coverLabel);
+
+        final SeekBar coverSeek = new SeekBar(context);
+        final int maxMs = Math.max(1, (int) Math.round(duration * 1000));
+        coverSeek.setMax(maxMs);
+        coverSeek.setProgress(Math.min(1000, maxMs));
+        content.addView(coverSeek);
+        final Runnable updateCoverLabel = () -> coverLabel.setText(LocaleController.formatString(
+                R.string.ShortsUploadCoverTime,
+                String.format(java.util.Locale.US, "%.1f", coverSeek.getProgress() / 1000f)));
+        updateCoverLabel.run();
+        coverSeek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                updateCoverLabel.run();
+            }
+            @Override public void onStartTrackingTouch(SeekBar seekBar) { }
+            @Override public void onStopTrackingTouch(SeekBar seekBar) { }
+        });
+
         new AlertDialog.Builder(context)
                 .setTitle(LocaleController.getString(R.string.ShortsUploadReel))
-                .setView(input)
+                .setView(content)
                 .setPositiveButton(LocaleController.getString(R.string.Send), (dialog, which) -> {
                     caption = input.getText() != null ? input.getText().toString().trim() : "";
+                    coverTimeMs = Math.max(0, Math.min(coverSeek.getProgress(), maxMs));
                     startUpload();
                 })
                 .setNegativeButton(LocaleController.getString(R.string.Cancel), null)
@@ -159,7 +192,8 @@ public final class ReelsUploadController {
             body.put("idempotencyKey", idempotencyKey);
             body.put("sizeBytes", sizeBytes);
             body.put("mimeType", mimeType);
-            body.put("duration", duration);
+            body.put("duration", Math.max(1, Math.round(duration)));
+            body.put("coverTimeMs", coverTimeMs);
             if (width > 0) body.put("width", width);
             if (height > 0) body.put("height", height);
             if (!TextUtils.isEmpty(caption)) body.put("caption", caption);

@@ -101,16 +101,25 @@ Upload parts use the session's Bearer ticket. Public reads send no authorization
 - `SharedMediaLayout.TAB_REELS` no longer collides with `TAB_POLL`.
 - Upload progress uses the Reels accent token.
 
-## Remaining for a complete v2 client
+## v2 client pass
 
-These are backend-driven features, not styling work:
+The profile Reels client now also includes:
 
-- For You / Following feed tabs and cursor sources (`GlobalFeedSource`,
-  `ProfileFeedSource`).
-- Save, share counting, follow/unfollow, creator header.
-- Comment replies, GIF upload, comment likes, pin, delete, optimistic reconciliation.
-- Upload cover-time selection and part-level retry.
-- `/r/{id}` and `owpg://.../r/{id}` deep-link routing.
-- Saved-Reels list and empty/error/end states beyond the current viewer.
+- For You / Following feed modes and profile-scoped pagination; channel items resolve
+  lazily around the visible page instead of blocking the whole feed.
+- Save, share counting, follow/unfollow, creator header and a saved-Reels list.
+- Threaded profile comments with replies, GIF upload, likes, pin/unpin and delete;
+  counts reconcile against the Reel detail response.
+- Upload duration as an integer plus an optional cover-time selector.
+- `/r/{id}` and `owpg://.../r/{id}` routing, plus view and share reporting.
 
-Do not reintroduce hardcoded colours or a second comments UI while implementing them.
+Remaining work is verification, not feature scaffolding:
+
+- Compile and exercise the flow on an Android device/emulator; this workspace has no
+  Android Gradle/JDK toolchain.
+- Replace the URL-based GIF attachment with a native GIF picker if the product wants
+  local media selection rather than a URL.
+- Confirm the saved-list cursor and comment-reply/pin paths against the deployed
+  `reels-client-handoff.md` backend (the handoff file is not present in this checkout).
+
+Do not reintroduce hardcoded colours or a second comments UI while extending it.

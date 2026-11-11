@@ -1327,6 +1327,49 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
     }
 
     /**
+     * Opens https://{server-public-host}/r/{reelId} and owpg://.../r/{reelId}. The Reel is public,
+     * so this uses the REST detail lookup rather than MTProto.
+     */
+    private boolean openReelLink(Uri uri, int account, Browser.Progress progress) {
+        final List<String> path = uri.getPathSegments();
+        if (path == null || path.size() != 2 || !"r".equals(path.get(0))) {
+            return false;
+        }
+        final String reelId = path.get(1);
+        if (TextUtils.isEmpty(reelId)) {
+            return false;
+        }
+        final AlertDialog progressDialog;
+        if (progress != null) {
+            progress.init();
+            progressDialog = null;
+        } else {
+            progressDialog = new AlertDialog(this, AlertDialog.ALERT_TYPE_SPINNER);
+            progressDialog.showDelayed(300);
+        }
+        ReelsRepository.loadReel(account, reelId, (item, failure) -> {
+            if (progress != null) {
+                progress.end();
+            }
+            if (progressDialog != null) {
+                try {
+                    progressDialog.dismiss();
+                } catch (Exception ignore) {
+                }
+            }
+            final BaseFragment lastFragment = getLastFragment();
+            if (item == null) {
+                if (lastFragment != null) {
+                    BulletinFactory.of(lastFragment).createErrorBulletin(LocaleController.getString(R.string.ShortsNotFound)).show();
+                }
+                return;
+            }
+            presentFragment(new ReelsViewer(item));
+        });
+        return true;
+    }
+
+    /**
      * Opens https://{server-public-host}/{username}/v/{messageId} (and the equivalent owpg:// link,
      * already normalized to the same path). Identity comes only from the path; the clip is shown
      * only after the channel and the exact message were loaded through the account's MTProto session.
@@ -2254,6 +2297,10 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
                                             data = Uri.parse("https://t.me" + (TextUtils.isEmpty(data.getPath()) ? "/" : data.getPath()) + (TextUtils.isEmpty(data.getQuery()) ? "" : "?" + data.getQuery()));
                                             // /{username}/v/{messageId} is a Shorts clip; it must win over the
                                             // generic /{username}/{messageId} and story branches below.
+                                            if (openReelLink(data, intentAccount[0], progress)) {
+                                                intent.setAction(null);
+                                                return false;
+                                            }
                                             if (openShortVideoLink(data, intentAccount[0], progress)) {
                                                 intent.setAction(null);
                                                 return false;

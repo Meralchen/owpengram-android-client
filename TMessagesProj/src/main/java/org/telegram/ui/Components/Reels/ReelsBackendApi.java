@@ -33,12 +33,17 @@ public final class ReelsBackendApi {
     private static final class CachedAuthorization {
         final String header;
         final long expiresAt;
-        CachedAuthorization(String header, long expiresAt) { this.header = header; this.expiresAt = expiresAt; }
+
+        CachedAuthorization(String header, long expiresAt) {
+            this.header = header;
+            this.expiresAt = expiresAt;
+        }
     }
 
     private static final ConcurrentHashMap<Integer, CachedAuthorization> authorizations = new ConcurrentHashMap<>();
 
-    private ReelsBackendApi() { }
+    private ReelsBackendApi() {
+    }
 
     public static String baseUrl(int account) {
         String host = MessagesController.getInstance(account).linkPrefix;
@@ -86,14 +91,27 @@ public final class ReelsBackendApi {
         authorizations.remove(account);
     }
 
-    public static void request(int account, String method, String path, JSONObject json, String bearerTicket, boolean withTelegramProof, Callback callback) {
+    public static void request(int account, String method, String path, JSONObject json, String bearerTicket,
+                               boolean withTelegramProof, Callback callback) {
+        request(account, method, path, json, bearerTicket, withTelegramProof, false, callback);
+    }
+
+    private static void request(int account, String method, String path, JSONObject json, String bearerTicket,
+                                boolean withTelegramProof, boolean retriedAfter401, Callback callback) {
         if (withTelegramProof) {
             authorizationHeader(account, header -> {
                 if (header == null) {
                     callback.onResult(null, 0);
                     return;
                 }
-                requestNow(account, method, path, json, bearerTicket, header, callback);
+                requestNow(account, method, path, json, bearerTicket, header, (body, status) -> {
+                    if (status == 401 && !retriedAfter401) {
+                        invalidateAuthorization(account);
+                        request(account, method, path, json, bearerTicket, true, true, callback);
+                    } else {
+                        callback.onResult(body, status);
+                    }
+                });
             });
         } else {
             requestNow(account, method, path, json, bearerTicket, null, callback);
@@ -144,7 +162,75 @@ public final class ReelsBackendApi {
         });
     }
 
-    private static void requestNow(int account, String method, String path, JSONObject json, String bearerTicket, String telegramAuthorization, Callback callback) {
+    /** Uploads raw image/gif bytes for a comment, with the same 401 refresh as JSON requests. */
+    public static void uploadCommentGif(int account, byte[] gif, Callback callback) {
+        if (gif == null || gif.length == 0) {
+            callback.onResult(null, 0);
+            return;
+        }
+        uploadRaw(account, "/api/comment-gifs", "image/gif", gif, false, callback);
+    }
+
+    private static void uploadRaw(int account, String path, String contentType, byte[] bytes, boolean retriedAfter401,
+                                  Callback callback) {
+        authorizationHeader(account, header -> {
+            if (header == null) {
+                callback.onResult(null, 0);
+                return;
+            }
+            final String url = absoluteUrl(account, path);
+            if (url == null) {
+                callback.onResult(null, 0);
+                return;
+            }
+            AsyncTask.THREAD_POOL_EXECUTOR.execute(() -> {
+                HttpURLConnection connection = null;
+                String body = null;
+                int status = 0;
+                try {
+                    connection = (HttpURLConnection) new URL(url).openConnection();
+                    connection.setRequestMethod("POST");
+                    connection.setConnectTimeout(15000);
+                    connection.setReadTimeout(60000);
+                    connection.setDoOutput(true);
+                    connection.setFixedLengthStreamingMode(bytes.length);
+                    connection.setRequestProperty("Accept", "application/json");
+                    connection.setRequestProperty("Content-Type", contentType);
+                    connection.setRequestProperty("Authorization", header);
+                    try (OutputStream out = connection.getOutputStream()) {
+                        out.write(bytes);
+                    }
+                    status = connection.getResponseCode();
+                    InputStream stream = status >= 200 && status < 300 ? connection.getInputStream() : connection.getErrorStream();
+                    if (stream != null) {
+                        StringBuilder result = new StringBuilder();
+                        try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+                            String line;
+                            while ((line = reader.readLine()) != null) result.append(line);
+                        }
+                        body = result.toString();
+                    }
+                } catch (Exception ignore) {
+                    // Never log authorization material or GIF bytes.
+                } finally {
+                    if (connection != null) connection.disconnect();
+                }
+                final String responseBody = body;
+                final int responseCode = status;
+                AndroidUtilities.runOnUIThread(() -> {
+                    if (responseCode == 401 && !retriedAfter401) {
+                        invalidateAuthorization(account);
+                        uploadRaw(account, path, contentType, bytes, true, callback);
+                    } else {
+                        callback.onResult(responseBody, responseCode);
+                    }
+                });
+            });
+        });
+    }
+
+    private static void requestNow(int account, String method, String path, JSONObject json, String bearerTicket,
+                                   String telegramAuthorization, Callback callback) {
         final String url = absoluteUrl(account, path);
         if (url == null) {
             callback.onResult(null, 0);

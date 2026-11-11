@@ -3863,7 +3863,7 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
             @Override public void onOpen(ReelsItem item) {
                 if (profileActivity instanceof ProfileActivity) {
                     final ProfileActivity host = (ProfileActivity) profileActivity;
-                    final ReelsViewer viewer = new ReelsViewer(item);
+                    final ReelsViewer viewer = new ReelsViewer(item, profileUsername);
                     host.setReelsViewerActive(true);
                     viewer.setExitAction(() -> host.setReelsViewerActive(false));
                     host.presentFragment(viewer);

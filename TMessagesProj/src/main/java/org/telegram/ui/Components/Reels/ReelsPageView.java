@@ -61,6 +61,8 @@ public class ReelsPageView extends FrameLayout {
         void onToggleLike(ReelsPageView page, boolean fromDoubleTap);
         void onOpenComments(ReelsPageView page);
         void onShare(ReelsPageView page);
+        void onToggleSave(ReelsPageView page);
+        void onView(ReelsPageView page, long positionMs, boolean completed);
         void onOpenChannel(ReelsPageView page);
         void onTogglePlay(ReelsPageView page);
         void onSeek(ReelsPageView page, long positionMs);
@@ -85,6 +87,7 @@ public class ReelsPageView extends FrameLayout {
     private final ActionButton likeButton;
     private final ActionButton commentsButton;
     private final ActionButton shareButton;
+    private final ActionButton saveButton;
     private final ActionButton viewsButton;
     private final ImageView heartView;
 
@@ -95,6 +98,8 @@ public class ReelsPageView extends FrameLayout {
     private float videoAspectRatio = 9f / 16f;
     private int videoWidth;
     private int videoHeight;
+    private boolean viewStarted;
+    private boolean viewCompleted;
     private final int bottomInset;
 
     private final Player.Listener playerListener = new Player.Listener() {
@@ -113,6 +118,7 @@ public class ReelsPageView extends FrameLayout {
             updateProgressVisibility();
             setKeepScreenOn(isPlaying);
             if (isPlaying) {
+                maybeReportView(false);
                 removeCallbacks(timelineUpdater);
                 post(timelineUpdater);
             } else {
@@ -143,6 +149,10 @@ public class ReelsPageView extends FrameLayout {
         public void run() {
             if (player == null || !attached) return;
             timelineView.setProgress(player.getCurrentPosition(), player.getDuration());
+            final long duration = player.getDuration();
+            if (duration > 0 && player.getCurrentPosition() >= duration - 500) {
+                maybeReportView(true);
+            }
             if (player.isPlaying()) {
                 postDelayed(this, 50);
             }
@@ -248,6 +258,11 @@ public class ReelsPageView extends FrameLayout {
             if (delegate != null) delegate.onShare(this);
         });
         actions.addView(shareButton);
+
+        saveButton = new ActionButton(context, R.drawable.msg_fave, () -> {
+            if (delegate != null) delegate.onToggleSave(this);
+        });
+        actions.addView(saveButton);
 
         viewsButton = new ActionButton(context, R.drawable.msg_views, null);
         actions.addView(viewsButton);
@@ -382,6 +397,8 @@ public class ReelsPageView extends FrameLayout {
 
     public void bind(ReelsItem item, int position) {
         this.item = item;
+        viewStarted = false;
+        viewCompleted = false;
         thumbView.setAlpha(player != null && player.isPlaying() ? 0f : 1f);
         errorView.setVisibility(GONE);
         if (item.source == ReelsItem.Source.CHANNEL) {
@@ -423,10 +440,13 @@ public class ReelsPageView extends FrameLayout {
         final TLRPC.User user = TextUtils.isEmpty(item.creatorUsername)
                 ? null : MessagesController.getInstance(item.account).getUser(item.creatorUsername);
         if (user != null) {
-            avatarDrawable.setInfo(user);
+            avatarDrawable.setInfo(item.account, user);
             avatarView.setForUserOrChat(user, avatarDrawable);
         } else {
-            avatarDrawable.setInfo(item.creatorUsername != null ? item.creatorUsername.hashCode() : 0, name, null);
+            final TLRPC.TL_user placeholder = new TLRPC.TL_user();
+            placeholder.id = item.creatorUsername != null ? Math.abs(item.creatorUsername.hashCode()) : 0;
+            placeholder.first_name = name;
+            avatarDrawable.setInfo(item.account, placeholder);
             avatarView.setImageDrawable(avatarDrawable);
         }
         if (!TextUtils.isEmpty(item.thumbnailUrl)) {
@@ -442,7 +462,23 @@ public class ReelsPageView extends FrameLayout {
                 item.liked ? ReelsTheme.viewerLike : ReelsTheme.viewerPrimary);
         likeButton.setText(item.likes > 0 ? String.valueOf(item.likes) : "");
         commentsButton.setText(item.comments > 0 ? String.valueOf(item.comments) : "");
+        shareButton.setText(item.shares > 0 ? String.valueOf(item.shares) : "");
+        saveButton.setVisibility(item.source == ReelsItem.Source.PROFILE ? VISIBLE : GONE);
+        saveButton.setIcon(item.saved ? R.drawable.msg_unfave : R.drawable.msg_fave, ReelsTheme.viewerPrimary);
         viewsButton.setText(item.views > 0 ? String.valueOf(item.views) : "");
+    }
+
+    private void maybeReportView(boolean completed) {
+        if (delegate == null || item == null || player == null) return;
+        if (completed) {
+            if (viewCompleted) return;
+            viewCompleted = true;
+            delegate.onView(this, player.getCurrentPosition(), true);
+        } else {
+            if (viewStarted) return;
+            viewStarted = true;
+            delegate.onView(this, player.getCurrentPosition(), false);
+        }
     }
 
     @Override
