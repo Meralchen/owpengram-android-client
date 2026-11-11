@@ -2,14 +2,10 @@ package org.telegram.ui.Components.Reels;
 
 import android.text.TextUtils;
 
-import org.json.JSONObject;
+import org.telegram.tgnet.TLRPC;
+import org.telegram.tgnet.tl.TL_reels;
 
-import java.text.SimpleDateFormat;
-import java.util.Date;
-import java.util.Locale;
-import java.util.TimeZone;
-
-/** One REST comment or reply. A comment may contain text, a GIF, or both. */
+/** One Reel comment or reply. A comment may contain text, a GIF document, or both. */
 public final class ReelsComment {
 
     public final long id;
@@ -23,6 +19,8 @@ public final class ReelsComment {
     public final int gifWidth;
     public final int gifHeight;
     public final long createdAtMs;
+    /** The GIF document itself; playback/display goes through MTProto like any other file. */
+    public final TLRPC.Document gif;
 
     public long likes;
     public boolean liked;
@@ -34,7 +32,7 @@ public final class ReelsComment {
 
     private ReelsComment(long id, long userId, String username, String displayName, String text,
                          long parentId, String gifId, String gifUrl, int gifWidth, int gifHeight,
-                         long createdAtMs) {
+                         long createdAtMs, TLRPC.Document gif) {
         this.id = id;
         this.userId = userId;
         this.username = username;
@@ -46,80 +44,84 @@ public final class ReelsComment {
         this.gifWidth = gifWidth;
         this.gifHeight = gifHeight;
         this.createdAtMs = createdAtMs;
+        this.gif = gif;
     }
 
-    public static ReelsComment fromJson(int account, JSONObject object) {
-        if (object == null) {
+    public static ReelsComment fromTl(int account, TL_reels.ReelComment comment, TLRPC.User user) {
+        if (comment == null || comment.id == 0) {
             return null;
         }
-        final long id = object.optLong("id", 0);
-        if (id <= 0) {
-            return null;
+        final String username = user != null && !TextUtils.isEmpty(user.username) ? user.username : null;
+        final String displayName = displayName(user, username);
+        TLRPC.Document gif = null;
+        if (comment.gif != null && comment.gif.id != 0) {
+            gif = comment.gif;
         }
-        final String username = object.optString("username", null);
-        final String displayName = object.optString("displayName", username);
-        String gifId = null;
-        String gifUrl = null;
-        int gifWidth = 0;
-        int gifHeight = 0;
-        JSONObject gif = object.optJSONObject("gif");
-        if (gif != null) {
-            gifId = gif.optString("id", null);
-            gifUrl = ReelsBackendApi.absoluteUrl(account, gif.optString("url", null));
-            gifWidth = gif.optInt("width", 0);
-            gifHeight = gif.optInt("height", 0);
-        }
-        final ReelsComment comment = new ReelsComment(
-                id,
-                object.optLong("userId", 0),
-                TextUtils.isEmpty(username) ? null : username,
+        final ReelsComment result = new ReelsComment(
+                comment.id,
+                comment.user_id,
+                username,
                 TextUtils.isEmpty(displayName) ? username : displayName,
-                object.optString("text", ""),
-                object.optLong("parentId", 0),
-                gifId,
-                gifUrl,
-                gifWidth,
-                gifHeight,
-                parseDate(object.optString("createdAt", null))
+                comment.text == null ? "" : comment.text,
+                comment.reply_to,
+                gif == null ? null : Long.toString(gif.id),
+                null,
+                gif == null ? 0 : gif.w,
+                gif == null ? 0 : gif.h,
+                comment.created_at > 0 ? comment.created_at * 1000L : 0,
+                gif
         );
-        comment.pinned = object.optBoolean("pinned", false);
-        comment.likes = Math.max(0, object.optLong("likes", 0));
-        comment.liked = object.optBoolean("liked", false);
-        comment.replyCount = Math.max(0, object.optInt("replyCount", 0));
-        comment.canDelete = object.optBoolean("canDelete", false);
-        comment.canPin = object.optBoolean("canPin", false);
-        comment.canReply = object.optBoolean("canReply", false);
-        return comment;
+        result.pinned = comment.pinned;
+        result.likes = Math.max(0, comment.likes);
+        result.liked = comment.liked;
+        result.replyCount = Math.max(0, comment.reply_count);
+        result.canDelete = comment.can_delete;
+        result.canPin = comment.can_pin;
+        result.canReply = comment.can_reply;
+        return result;
+    }
+
+    private static String displayName(TLRPC.User user, String fallback) {
+        if (user == null) {
+            return fallback;
+        }
+        final StringBuilder builder = new StringBuilder();
+        if (!TextUtils.isEmpty(user.first_name)) {
+            builder.append(user.first_name);
+        }
+        if (!TextUtils.isEmpty(user.last_name)) {
+            if (builder.length() > 0) {
+                builder.append(' ');
+            }
+            builder.append(user.last_name);
+        }
+        return builder.length() == 0 ? fallback : builder.toString();
+    }
+
+    /** Poster of the GIF document, when the server attached one. */
+    public TLRPC.PhotoSize gifThumb() {
+        if (gif == null || gif.thumbs == null) {
+            return null;
+        }
+        TLRPC.PhotoSize best = null;
+        for (TLRPC.PhotoSize size : gif.thumbs) {
+            if (size == null || size instanceof TLRPC.TL_photoSizeEmpty) {
+                continue;
+            }
+            if (best == null || size.w > best.w) {
+                best = size;
+            }
+        }
+        return best;
     }
 
     public boolean isGifOnly() {
-        return TextUtils.isEmpty(text) && !TextUtils.isEmpty(gifUrl);
+        return TextUtils.isEmpty(text) && gif != null;
     }
 
     public String displayNameOrUsername() {
         if (!TextUtils.isEmpty(displayName)) return displayName;
         if (!TextUtils.isEmpty(username)) return username;
         return "Reel";
-    }
-
-    private static long parseDate(String raw) {
-        if (TextUtils.isEmpty(raw)) return 0;
-        String normalised = raw.trim();
-        String[] patterns = new String[]{
-                "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",
-                "yyyy-MM-dd'T'HH:mm:ss'Z'",
-                "yyyy-MM-dd'T'HH:mm:ss.SSSXXX",
-                "yyyy-MM-dd'T'HH:mm:ssXXX"
-        };
-        for (String pattern : patterns) {
-            try {
-                SimpleDateFormat format = new SimpleDateFormat(pattern, Locale.US);
-                if (pattern.endsWith("'Z'")) format.setTimeZone(TimeZone.getTimeZone("UTC"));
-                Date date = format.parse(normalised);
-                if (date != null) return date.getTime();
-            } catch (Exception ignore) {
-            }
-        }
-        return 0;
     }
 }

@@ -325,7 +325,7 @@ public final class ReelsStoryPage extends FrameLayout {
         errorView.setVisibility(GONE);
         playView.setVisibility(VISIBLE);
         loadingView.setVisibility(VISIBLE);
-        coverView.setCover(item.thumbnailUrl, item.initial());
+        coverView.setCover(item.media, item.thumb, item.initial());
         header.bind(item, own, muted);
         actions.bind(item, own);
         progressView.setCount(this.count);

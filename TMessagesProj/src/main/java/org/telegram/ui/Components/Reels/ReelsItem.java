@@ -1,17 +1,17 @@
 package org.telegram.ui.Components.Reels;
 
-import android.net.Uri;
 import android.text.TextUtils;
 
-import org.json.JSONObject;
-import org.telegram.messenger.FileLog;
+import org.telegram.tgnet.TLRPC;
+import org.telegram.tgnet.tl.TL_reels;
 
-import java.text.SimpleDateFormat;
-import java.util.Date;
 import java.util.Locale;
-import java.util.TimeZone;
 
-/** A permanent, profile-owned Reel. There is deliberately no channel or message identity here. */
+/**
+ * A permanent, profile-owned Reel. There is deliberately no channel or message
+ * identity here, and no HTTP URL: media is a Telegram document streamed over
+ * the account's MTProto connection.
+ */
 public final class ReelsItem {
 
     public final String id;
@@ -28,6 +28,13 @@ public final class ReelsItem {
     public final long createdAtMs;
     public final boolean commentsEnabled;
 
+    /** Wire identity: reel id/access hash are needed by every reels.* call. */
+    public final long tlId;
+    public final long accessHash;
+    /** The backing video document; null for pre-migration Reels. */
+    public final TLRPC.Document media;
+    public final TLRPC.PhotoSize thumb;
+
     public long views;
     public long likes;
     public long comments;
@@ -38,10 +45,13 @@ public final class ReelsItem {
     public boolean following;
     public long resumePositionMs;
 
-    private ReelsItem(String id, String ownerUsername, String ownerDisplayName, long ownerUserId,
-                      String mediaUrl, String thumbnailUrl, String shareUrl, String caption,
-                      int durationSeconds, int width, int height, long createdAtMs, boolean commentsEnabled) {
+    private ReelsItem(String id, long tlId, long accessHash, String ownerUsername, String ownerDisplayName,
+                      long ownerUserId, String mediaUrl, String thumbnailUrl, String shareUrl, String caption,
+                      int durationSeconds, int width, int height, long createdAtMs, boolean commentsEnabled,
+                      TLRPC.Document media, TLRPC.PhotoSize thumb) {
         this.id = id;
+        this.tlId = tlId;
+        this.accessHash = accessHash;
         this.ownerUsername = ownerUsername;
         this.ownerDisplayName = ownerDisplayName;
         this.ownerUserId = ownerUserId;
@@ -54,78 +64,81 @@ public final class ReelsItem {
         this.height = height;
         this.createdAtMs = createdAtMs;
         this.commentsEnabled = commentsEnabled;
+        this.media = media;
+        this.thumb = thumb;
     }
 
-    public static ReelsItem fromJson(int account, JSONObject object) {
-        if (object == null) {
+    /** Builds a Reel from its MTProto projection plus the owner the feed shipped with it. */
+    public static ReelsItem fromTl(int account, TL_reels.Reel reel, TLRPC.User owner) {
+        if (reel == null || reel.id == 0) {
             return null;
         }
-        final String id = object.optString("id", null);
-        if (TextUtils.isEmpty(id)) {
-            return null;
+        final String id = Long.toString(reel.id);
+        final String username = owner != null && !TextUtils.isEmpty(owner.username) ? owner.username : null;
+        final String displayName = owner != null ? displayName(owner) : username;
+        TLRPC.Document document = null;
+        if (reel.media instanceof TLRPC.TL_document && reel.media.id != 0) {
+            document = (TLRPC.Document) reel.media;
         }
-        final String source = object.optString("source", "profile");
-        if (!"profile".equals(source) || id.startsWith("channel:")) {
-            FileLog.w("Ignoring non-profile Reel " + id);
-            return null;
-        }
-
-        final String mediaUrl = ReelsBackendApi.absoluteUrl(account, object.optString("mediaUrl", null));
-        if (TextUtils.isEmpty(mediaUrl)) {
-            FileLog.w("Ignoring Reel without public media " + id);
-            return null;
-        }
-
-        JSONObject owner = object.optJSONObject("owner");
-        final String username;
-        final String displayName;
-        final long userId;
-        if (owner != null) {
-            username = owner.optString("username", null);
-            displayName = owner.optString("displayName", username);
-            userId = owner.optLong("userId", 0);
-        } else {
-            username = object.optString("username", null);
-            displayName = object.optString("displayName", username);
-            userId = object.optLong("userId", 0);
-        }
-        if (TextUtils.isEmpty(username)) {
-            FileLog.w("Ignoring profile Reel without an owner " + id);
-            return null;
-        }
-
-        String thumbnailUrl = ReelsBackendApi.absoluteUrl(account, object.optString("thumbnailUrl", null));
-        if (TextUtils.isEmpty(thumbnailUrl)) {
-            thumbnailUrl = null;
-        }
-        String shareUrl = ReelsBackendApi.absoluteUrl(account, object.optString("shareUrl", null));
-        if (TextUtils.isEmpty(shareUrl)) {
-            shareUrl = ReelsBackendApi.absoluteUrl(account, "/r/" + Uri.encode(id));
-        }
-
+        final TLRPC.PhotoSize thumb = document == null ? null : firstThumb(document);
         final ReelsItem item = new ReelsItem(
                 id,
+                reel.id,
+                reel.access_hash,
                 username,
                 TextUtils.isEmpty(displayName) ? username : displayName,
-                userId,
-                mediaUrl,
-                thumbnailUrl,
-                shareUrl,
-                object.optString("caption", ""),
-                Math.max(0, object.optInt("duration", 0)),
-                Math.max(0, object.optInt("width", 0)),
-                Math.max(0, object.optInt("height", 0)),
-                parseDate(object.optString("createdAt", null)),
-                object.optBoolean("commentsEnabled", true)
+                reel.owner_id,
+                ReelsCache.streamUri(account, document),
+                null,
+                ReelsCache.shareUrl(account, id),
+                reel.caption == null ? "" : reel.caption,
+                Math.max(0, reel.duration),
+                Math.max(0, reel.width),
+                Math.max(0, reel.height),
+                reel.created_at > 0 ? reel.created_at * 1000L : 0,
+                reel.comments_enabled,
+                document,
+                thumb
         );
-        item.views = Math.max(0, object.optLong("views", 0));
-        item.likes = Math.max(0, object.optLong("likes", 0));
-        item.comments = Math.max(0, object.optLong("comments", 0));
-        item.saves = Math.max(0, object.optLong("saves", 0));
-        item.shares = Math.max(0, object.optLong("shares", 0));
-        item.liked = object.optBoolean("liked", false);
-        item.saved = object.optBoolean("saved", false);
+        item.views = Math.max(0, reel.views);
+        item.likes = Math.max(0, reel.likes);
+        item.comments = Math.max(0, reel.comments);
+        item.saves = Math.max(0, reel.saves);
+        item.shares = Math.max(0, reel.shares);
+        item.liked = reel.liked;
+        item.saved = reel.saved;
+        item.following = reel.following;
         return item;
+    }
+
+    private static String displayName(TLRPC.User user) {
+        final StringBuilder builder = new StringBuilder();
+        if (!TextUtils.isEmpty(user.first_name)) {
+            builder.append(user.first_name);
+        }
+        if (!TextUtils.isEmpty(user.last_name)) {
+            if (builder.length() > 0) {
+                builder.append(' ');
+            }
+            builder.append(user.last_name);
+        }
+        return builder.length() == 0 ? user.username : builder.toString();
+    }
+
+    private static TLRPC.PhotoSize firstThumb(TLRPC.Document document) {
+        if (document.thumbs == null || document.thumbs.isEmpty()) {
+            return null;
+        }
+        TLRPC.PhotoSize best = null;
+        for (TLRPC.PhotoSize size : document.thumbs) {
+            if (size == null || size instanceof TLRPC.TL_photoSizeEmpty) {
+                continue;
+            }
+            if (best == null || size.w > best.w) {
+                best = size;
+            }
+        }
+        return best;
     }
 
     public void copyCountersFrom(ReelsItem other) {
@@ -137,6 +150,11 @@ public final class ReelsItem {
         shares = other.shares;
         liked = other.liked;
         saved = other.saved;
+        following = other.following;
+    }
+
+    public boolean hasPlayableMedia() {
+        return !TextUtils.isEmpty(mediaUrl);
     }
 
     public String initial() {
@@ -144,26 +162,5 @@ public final class ReelsItem {
             return ownerDisplayName.substring(0, 1).toUpperCase(Locale.US);
         }
         return "?";
-    }
-
-    private static long parseDate(String raw) {
-        if (TextUtils.isEmpty(raw)) return 0;
-        String normalised = raw.trim();
-        String[] patterns = new String[]{
-                "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",
-                "yyyy-MM-dd'T'HH:mm:ss'Z'",
-                "yyyy-MM-dd'T'HH:mm:ss.SSSXXX",
-                "yyyy-MM-dd'T'HH:mm:ssXXX"
-        };
-        for (String pattern : patterns) {
-            try {
-                SimpleDateFormat format = new SimpleDateFormat(pattern, Locale.US);
-                if (pattern.endsWith("'Z'")) format.setTimeZone(TimeZone.getTimeZone("UTC"));
-                Date date = format.parse(normalised);
-                if (date != null) return date.getTime();
-            } catch (Exception ignore) {
-            }
-        }
-        return 0;
     }
 }

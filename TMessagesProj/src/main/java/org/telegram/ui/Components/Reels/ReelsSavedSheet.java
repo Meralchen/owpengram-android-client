@@ -132,7 +132,7 @@ public final class ReelsSavedSheet extends BottomSheet {
         row.setPadding(dp(4), dp(6), dp(4), dp(6));
 
         final ReelsCoverView cover = new ReelsCoverView(getContext());
-        cover.setCover(item.thumbnailUrl, item.initial());
+        cover.setCover(item.media, item.thumb, item.initial());
         row.addView(cover, new LinearLayout.LayoutParams(dp(58), dp(78)));
 
         final LinearLayout text = new LinearLayout(getContext());

@@ -11,6 +11,7 @@ import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.animation.DecelerateInterpolator;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.PopupMenu;
@@ -68,6 +69,13 @@ public final class ReelsStoryViewer extends BaseFragment implements ReelsStoryPa
     private Runnable homeAction;
     private Runnable exitAction;
     private ReelsCommentsSheet pendingGifSheet;
+    private boolean commentsOpen;
+
+    /** Comments shrink the Reel like a Telegram Story view: the page steps back as the sheet rises. */
+    private static final long REELS_COMMENTS_SHRINK_MS = 260;
+    private static final float REELS_COMMENTS_SCALE = 0.72f;
+    private static final float REELS_COMMENTS_LIFT = 0.06f;
+    private static final float REELS_COMMENTS_DIM = 0.72f;
 
     public ReelsStoryViewer() {
         this(ReelsFeedSource.FOR_YOU, null, null);
@@ -468,7 +476,35 @@ public final class ReelsStoryViewer extends BaseFragment implements ReelsStoryPa
                     });
                 });
         sheet.setGifPickerHost(this);
+        setCommentsOpen(true);
+        sheet.setOnDismissListener((Runnable) () -> setCommentsOpen(false));
         sheet.show();
+    }
+
+    private void setCommentsOpen(boolean open) {
+        if (commentsOpen == open) {
+            return;
+        }
+        commentsOpen = open;
+        if (adapter == null) {
+            return;
+        }
+        final ReelsStoryPage page = adapter.pageAt(currentPage);
+        if (page == null) {
+            return;
+        }
+        final int height = page.getHeight() > 0
+                ? page.getHeight()
+                : getResources().getDisplayMetrics().heightPixels;
+        page.animate().cancel();
+        page.animate()
+                .scaleX(open ? REELS_COMMENTS_SCALE : 1f)
+                .scaleY(open ? REELS_COMMENTS_SCALE : 1f)
+                .translationY(open ? -height * REELS_COMMENTS_LIFT : 0f)
+                .alpha(open ? REELS_COMMENTS_DIM : 1f)
+                .setDuration(REELS_COMMENTS_SHRINK_MS)
+                .setInterpolator(new DecelerateInterpolator())
+                .start();
     }
 
     @Override

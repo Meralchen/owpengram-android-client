@@ -4,6 +4,8 @@ import android.content.Context;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.text.TextUtils;
+
+import org.telegram.tgnet.TLRPC;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -60,6 +62,7 @@ public final class ReelsCommentsSheet extends BottomSheet {
     private boolean sending;
     private String pendingGifId;
     private String pendingGifUrl;
+    private TLRPC.InputDocument pendingGifInput;
     private int pendingGifWidth;
     private int pendingGifHeight;
 
@@ -202,6 +205,7 @@ public final class ReelsCommentsSheet extends BottomSheet {
             }
             pendingGifId = gif.id;
             pendingGifUrl = gif.url;
+            pendingGifInput = gif.input;
             pendingGifWidth = gif.width;
             pendingGifHeight = gif.height;
             showStatus("GIF attached.");
@@ -327,9 +331,9 @@ public final class ReelsCommentsSheet extends BottomSheet {
             row.addView(text);
         }
 
-        if (!TextUtils.isEmpty(comment.gifUrl)) {
+        if (comment.gif != null) {
             final ReelsCoverView gif = new ReelsCoverView(getContext());
-            gif.setCover(comment.gifUrl, "");
+            gif.setCover(comment.gif, comment.gifThumb(), "");
             final LinearLayout.LayoutParams gifParams = new LinearLayout.LayoutParams(
                     Math.min(dp(220), dp(comment.gifWidth > 0 ? 220 : 180)), dp(130));
             gifParams.topMargin = dp(2);
@@ -457,7 +461,7 @@ public final class ReelsCommentsSheet extends BottomSheet {
         sending = true;
         updateComposerState();
         final long parentId = replyTarget == null ? 0 : replyTarget.id;
-        repository.postComment(item, text, parentId, pendingGifId, pendingGifUrl, (comment, error) -> {
+        repository.postComment(item, text, parentId, pendingGifInput, (comment, error) -> {
             sending = false;
             if (error != null) {
                 showStatus(error.describe());
@@ -468,6 +472,7 @@ public final class ReelsCommentsSheet extends BottomSheet {
             replyTarget = null;
             pendingGifId = null;
             pendingGifUrl = null;
+            pendingGifInput = null;
             pendingGifWidth = 0;
             pendingGifHeight = 0;
             showStatus(null);

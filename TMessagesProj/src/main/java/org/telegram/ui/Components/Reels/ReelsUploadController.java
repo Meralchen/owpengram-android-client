@@ -6,14 +6,21 @@ import android.net.Uri;
 import android.os.AsyncTask;
 import android.text.TextUtils;
 
-import org.json.JSONObject;
+import org.telegram.messenger.ConnectionsManager;
+import org.telegram.messenger.MessagesController;
+import org.telegram.tgnet.NativeByteBuffer;
+import org.telegram.tgnet.TLRPC;
+import org.telegram.tgnet.tl.TL_reels;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.UUID;
 
-/** A real foreground profile Reel upload: session, 512 KiB parts, then completion. */
+/**
+ * A real foreground Reel upload: the video is uploaded as a Telegram document
+ * with upload.saveBigFilePart and then published with reels.create.
+ */
 public final class ReelsUploadController {
 
     public interface Callback {
@@ -21,15 +28,20 @@ public final class ReelsUploadController {
     }
 
     private static final int PART_SIZE = 512 * 1024;
+    private static final int MAX_PARTS = 4000;
 
     private final int account;
     private final Context context;
     private boolean running;
     private boolean cancelled;
-    private String idempotencyKey;
-    private String uploadId;
-    private String ticket;
     private byte[] bytes;
+    private String caption;
+    private int coverTimeMs;
+    private int duration;
+    private int width;
+    private int height;
+    private String mime;
+    private long fileId;
     private int partIndex;
     private int partCount;
     private Callback callback;
@@ -48,9 +60,6 @@ public final class ReelsUploadController {
         running = true;
         cancelled = false;
         this.callback = callback;
-        this.idempotencyKey = UUID.randomUUID().toString();
-        this.uploadId = null;
-        this.ticket = null;
         this.bytes = null;
         this.partIndex = 0;
         this.partCount = 0;
@@ -63,12 +72,12 @@ public final class ReelsUploadController {
                     retriever.setDataSource(context, uri);
                     final int durationMs = parseInt(retriever.extractMetadata(
                             MediaMetadataRetriever.METADATA_KEY_DURATION));
-                    final int width = parseInt(retriever.extractMetadata(
+                    final int videoWidth = parseInt(retriever.extractMetadata(
                             MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH));
-                    final int height = parseInt(retriever.extractMetadata(
+                    final int videoHeight = parseInt(retriever.extractMetadata(
                             MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT));
                     retriever.release();
-                    return new Object[]{data, durationMs, width, height};
+                    return new Object[]{data, durationMs, videoWidth, videoHeight};
                 } catch (Exception error) {
                     return new Object[]{null, 0, 0, 0};
                 }
@@ -87,105 +96,104 @@ public final class ReelsUploadController {
                 }
                 bytes = data;
                 final int durationMs = (int) result[1];
-                final int width = (int) result[2];
-                final int height = (int) result[3];
-                final String mime = context.getContentResolver().getType(uri);
-                createSession(TextUtils.isEmpty(caption) ? "" : caption,
-                        Math.max(0, coverTimeMs),
-                        Math.max(1, (int) Math.ceil(durationMs / 1000d)),
-                        width, height,
-                        TextUtils.isEmpty(mime) ? "video/mp4" : mime);
+                final int videoWidth = (int) result[2];
+                final int videoHeight = (int) result[3];
+                final String type = context.getContentResolver().getType(uri);
+                ReelsUploadController.this.caption = TextUtils.isEmpty(caption) ? "" : caption;
+                ReelsUploadController.this.coverTimeMs = Math.max(0, coverTimeMs);
+                ReelsUploadController.this.duration = Math.max(1, (int) Math.ceil(durationMs / 1000d));
+                ReelsUploadController.this.width = Math.max(1, videoWidth);
+                ReelsUploadController.this.height = Math.max(1, videoHeight);
+                ReelsUploadController.this.mime = TextUtils.isEmpty(type) ? "video/mp4" : type;
+                beginUpload();
             }
         }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
     }
 
-    private void createSession(String caption, int coverTimeMs, int duration, int width, int height, String mime) {
-        final JSONObject body = new JSONObject();
-        try {
-            body.put("idempotencyKey", idempotencyKey);
-            body.put("sizeBytes", bytes.length);
-            body.put("mimeType", mime);
-            body.put("duration", duration);
-            body.put("width", width);
-            body.put("height", height);
-            body.put("coverTimeMs", coverTimeMs);
-            body.put("caption", caption);
-        } catch (Exception ignore) {
+    private void beginUpload() {
+        partCount = Math.max(1, (bytes.length + PART_SIZE - 1) / PART_SIZE);
+        if (partCount > MAX_PARTS) {
+            finish(null, "This video file is too large.");
+            return;
         }
-        ReelsBackendApi.request(account, "POST", "/api/profiles/me/reels/uploads",
-                body, null, true, (response, status) -> {
-                    if (cancelled) return;
-                    if (status < 200 || status >= 300) {
-                        finish(null, ReelsError.fromResponse(status, response).describe());
-                        return;
-                    }
-                    try {
-                        final JSONObject root = new JSONObject(response == null ? "{}" : response);
-                        final JSONObject session = root.optJSONObject("upload") != null
-                                ? root.optJSONObject("upload") : root;
-                        uploadId = session.optString("uploadId", session.optString("id", null));
-                        ticket = session.optString("ticket", session.optString("uploadTicket", null));
-                        if (TextUtils.isEmpty(uploadId) || TextUtils.isEmpty(ticket)) {
-                            finish(null, "The upload session could not be started.");
-                            return;
-                        }
-                        partCount = Math.max(1, (bytes.length + PART_SIZE - 1) / PART_SIZE);
-                        partIndex = 0;
-                        uploadNextPart();
-                    } catch (Exception malformed) {
-                        finish(null, "The upload session could not be read.");
-                    }
-                });
+        fileId = ((long) bytes.length << 20) ^ System.nanoTime();
+        if (fileId == 0) fileId = 1;
+        partIndex = 0;
+        uploadNextPart();
     }
 
     private void uploadNextPart() {
         if (cancelled) return;
         if (partIndex >= partCount) {
-            completeUpload();
+            publish();
             return;
         }
         final int start = partIndex * PART_SIZE;
         final int end = Math.min(bytes.length, start + PART_SIZE);
         final byte[] part = Arrays.copyOfRange(bytes, start, end);
-        final int number = partIndex + 1;
-        uploadPartWithRetry(number, part, 0);
-    }
-
-    private void uploadPartWithRetry(int partNumber, byte[] part, int attempt) {
-        ReelsBackendApi.uploadPart(account, uploadId, partNumber, part, ticket, (response, status) -> {
+        final int index = partIndex;
+        final NativeByteBuffer buffer = buffer(part);
+        if (buffer == null) {
+            finish(null, "The selected video could not be read.");
+            return;
+        }
+        final TLRPC.TL_upload_saveBigFilePart request = new TLRPC.TL_upload_saveBigFilePart();
+        request.file_id = fileId;
+        request.file_part = index;
+        request.file_total_parts = partCount;
+        request.bytes = buffer;
+        ConnectionsManager.getInstance(account).sendRequest(request, (response, error) -> {
             if (cancelled) return;
-            if (status >= 200 && status < 300) {
-                partIndex++;
-                uploadNextPart();
+            if (error != null) {
+                finish(null, ReelsError.fromTl(error).describe());
                 return;
             }
-            if (attempt == 0 && (status == 0 || status >= 500)) {
-                uploadPartWithRetry(partNumber, part, attempt + 1);
-                return;
-            }
-            finish(null, ReelsError.fromResponse(status, response).describe());
-        });
+            partIndex = index + 1;
+            uploadNextPart();
+        }, ConnectionsManager.RequestFlagFailOnServerErrors);
     }
 
-    private void completeUpload() {
-        ReelsBackendApi.request(account, "POST",
-                "/api/profiles/me/reels/uploads/" + Uri.encode(uploadId) + "/complete",
-                new JSONObject(), ticket, false, (response, status) -> {
-                    if (cancelled) return;
-                    if (status < 200 || status >= 300) {
-                        finish(null, ReelsError.fromResponse(status, response).describe());
-                        return;
-                    }
-                    ReelsItem item = null;
-                    try {
-                        final JSONObject root = new JSONObject(response == null ? "{}" : response);
-                        final JSONObject object = root.optJSONObject("item") != null
-                                ? root.optJSONObject("item") : root.optJSONObject("reel");
-                        item = ReelsItem.fromJson(account, object);
-                    } catch (Exception ignore) {
-                    }
-                    finish(item, null);
-                });
+    private void publish() {
+        if (cancelled) return;
+        final TLRPC.TL_inputFile inputFile = new TLRPC.TL_inputFile();
+        inputFile.id = fileId;
+        inputFile.parts = partCount;
+        inputFile.name = "reel.mp4";
+        inputFile.md5_checksum = "";
+
+        final TLRPC.TL_documentAttributeVideo video = new TLRPC.TL_documentAttributeVideo();
+        video.duration = duration;
+        video.w = width;
+        video.h = height;
+        video.supports_streaming = true;
+
+        final TLRPC.TL_inputMediaUploadedDocument media = new TLRPC.TL_inputMediaUploadedDocument();
+        media.file = inputFile;
+        media.mime_type = mime;
+        media.attributes = new ArrayList<>();
+        media.attributes.add(video);
+
+        final TL_reels.create request = new TL_reels.create();
+        request.media = media;
+        request.caption = caption;
+        request.cover_time_ms = coverTimeMs;
+        request.comments_enabled = true;
+
+        ConnectionsManager.getInstance(account).sendRequest(request, (response, error) -> {
+            if (cancelled) return;
+            final ReelsError failure = ReelsError.fromTl(error);
+            if (failure != null) {
+                finish(null, failure.describe());
+                return;
+            }
+            if (!(response instanceof TL_reels.Reel)) {
+                finish(null, "The Reel could not be published.");
+                return;
+            }
+            final TL_reels.Reel reel = (TL_reels.Reel) response;
+            final TLRPC.User owner = MessagesController.getInstance(account).getUser(reel.owner_id);
+            finish(ReelsItem.fromTl(account, reel, owner), null);
+        }, ConnectionsManager.RequestFlagFailOnServerErrors);
     }
 
     public void cancel() {
@@ -199,6 +207,17 @@ public final class ReelsUploadController {
             final Callback result = callback;
             callback = null;
             result.onUploaded(item, error);
+        }
+    }
+
+    private static NativeByteBuffer buffer(byte[] part) {
+        try {
+            final NativeByteBuffer buffer = new NativeByteBuffer(part.length);
+            buffer.writeBytes(part);
+            buffer.rewind();
+            return buffer;
+        } catch (Exception error) {
+            return null;
         }
     }
 

@@ -1,6 +1,7 @@
 package org.telegram.ui.Components.Reels;
 
-import org.json.JSONObject;
+import org.telegram.tgnet.TLObject;
+import org.telegram.tgnet.TLRPC;
 
 /** A small, transport-neutral error value for Reels requests. */
 public final class ReelsError {
@@ -29,19 +30,16 @@ public final class ReelsError {
         return new ReelsError(0, null);
     }
 
-    public static ReelsError fromResponse(int status, String body) {
-        if (status >= 200 && status < 300) {
+    /** Maps an MTProto RPC failure onto the Reels error surface. */
+    public static ReelsError fromTl(TLObject error) {
+        if (error == null) {
             return null;
         }
-        String message = null;
-        if (body != null && body.length() > 0) {
-            try {
-                JSONObject object = new JSONObject(body);
-                message = object.optString("error", object.optString("message", null));
-            } catch (Exception ignore) {
-            }
+        if (error instanceof TLRPC.TL_error) {
+            final TLRPC.TL_error tlError = (TLRPC.TL_error) error;
+            return new ReelsError(tlError.code, tlError.text);
         }
-        return new ReelsError(status, message);
+        return new ReelsError(500, null);
     }
 
     public String describe() {

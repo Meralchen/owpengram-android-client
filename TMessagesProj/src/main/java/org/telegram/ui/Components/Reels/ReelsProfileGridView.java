@@ -165,7 +165,7 @@ public final class ReelsProfileGridView extends FrameLayout {
         final int cellWidth = Math.max(1, (screenWidth - dp(4)) / 3);
         final int cellHeight = Math.round(cellWidth * 16f / 9f);
         final ReelsCoverView cover = new ReelsCoverView(getContext());
-        cover.setCover(item.thumbnailUrl, item.initial());
+        cover.setCover(item.media, item.thumb, item.initial());
         cover.setContentDescription("Open Reel by @" + item.ownerUsername);
         cover.setOnClickListener(v -> delegate.onOpen(item));
         final GridLayout.LayoutParams params = new GridLayout.LayoutParams();
