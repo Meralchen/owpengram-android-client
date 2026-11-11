@@ -11688,4 +11688,18 @@
     <string name="MainTabsMoveEarlier">Move earlier</string>
     <string name="MainTabsMoveLater">Move later</string>
     <string name="MainTabsProfileRequired">Profile (always on)</string>
+    <string name="ReelsComments">Comments</string>
+    <string name="ReelsCommentHint">Add a comment…</string>
+    <string name="ReelsExplore">Explore Reels</string>
+    <string name="ReelsFollow">Follow</string>
+    <string name="ReelsFollowing">Following</string>
+    <string name="ReelsForYou">For You</string>
+    <string name="ReelsLoading">Loading Reels…</string>
+    <string name="ReelsNoReels">No Reels yet.</string>
+    <string name="ReelsPlayError">Couldn’t play this Reel. Tap to retry.</string>
+    <string name="ReelsReplay">Replay</string>
+    <string name="ReelsRetry">Retry</string>
+    <string name="ReelsSaved">Saved Reels</string>
+    <string name="ReelsShare">Share Reel</string>
+    <string name="ReelsUpload">Upload Reel</string>
 </resources>

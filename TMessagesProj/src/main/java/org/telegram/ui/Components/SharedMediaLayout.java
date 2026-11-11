@@ -138,10 +138,6 @@ import org.telegram.ui.ChatActivity;
 import org.telegram.ui.ChatActivityContainer;
 import org.telegram.ui.Components.Forum.ForumUtilities;
 import org.telegram.ui.Components.Premium.LimitReachedBottomSheet;
-import org.telegram.ui.Components.Reels.ReelsViewer;
-import org.telegram.ui.Components.Reels.ReelsItem;
-import org.telegram.ui.Components.Reels.ReelsProfileGridView;
-import org.telegram.ui.Components.Reels.ReelsUploadController;
 import org.telegram.ui.Components.Reactions.ReactionsLayoutInBubble;
 import org.telegram.ui.Components.blur3.BlurredBackgroundDrawableViewFactory;
 import org.telegram.ui.Components.blur3.ViewGroupPartRenderer;
@@ -192,7 +188,6 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
     public static final int TAB_GROUPUSERS = 7;
     public static final int TAB_STORIES = 8;
     public static final int TAB_ARCHIVED_STORIES = 9;
-    public static final int TAB_REELS = 15;
     public static final int TAB_RECOMMENDED_CHANNELS = 10;
     public static final int TAB_SAVED_DIALOGS = 11;
     public static final int TAB_SAVED_MESSAGES = 12;
@@ -515,7 +510,6 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
         private ClippingImageView animatingImageView;
         private RecyclerAnimationScrollHelper scrollHelper;
         public int selectedType;
-        ReelsProfileGridView profileReelsView;
 
         public SharedMediaFastScrollTooltip fastScrollHintView;
         public Runnable fastScrollHideHintRunnable;
@@ -3843,64 +3837,6 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
         return false;
     }
 
-    private boolean isProfileReelsAvailable() {
-        if (viewType != VIEW_TYPE_PROFILE_ACTIVITY || !DialogObject.isUserDialog(dialog_id)) return false;
-        if (profileActivity == null) return false;
-        final int account = profileActivity.getCurrentAccount();
-        final boolean own = dialog_id == UserConfig.getInstance(account).getClientUserId();
-        if (own) return true;
-        final TLRPC.User user = MessagesController.getInstance(account).getUser(dialog_id);
-        return user != null && !TextUtils.isEmpty(UserObject.getPublicUsername(user));
-    }
-
-    private ReelsProfileGridView ensureProfileReelsView(MediaPage page) {
-        if (page.profileReelsView != null || !isProfileReelsAvailable()) return page.profileReelsView;
-        final int account = profileActivity.getCurrentAccount();
-        final TLRPC.User profileUser = MessagesController.getInstance(account).getUser(dialog_id);
-        final String profileUsername = profileUser != null ? UserObject.getPublicUsername(profileUser) : null;
-        final boolean ownProfile = dialog_id == UserConfig.getInstance(account).getClientUserId();
-        page.profileReelsView = new ReelsProfileGridView(getContext(), account, profileUsername, ownProfile, new ReelsProfileGridView.Delegate() {
-            @Override public void onOpen(ReelsItem item) {
-                if (profileActivity instanceof ProfileActivity) {
-                    final ProfileActivity host = (ProfileActivity) profileActivity;
-                    final ReelsViewer viewer = new ReelsViewer(item);
-                    host.setReelsViewerActive(true);
-                    viewer.setExitAction(() -> host.setReelsViewerActive(false));
-                    host.presentFragment(viewer);
-                }
-            }
-
-            @Override public void onUpload() {
-                startProfileReelUpload();
-            }
-        });
-        page.profileReelsView.setVisibility(View.GONE);
-        page.addView(page.profileReelsView, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT, Gravity.FILL, 0, 48 + 6, 0, 0));
-        return page.profileReelsView;
-    }
-
-    public static final int REQUEST_PROFILE_REEL = 592;
-
-    private void startProfileReelUpload() {
-        if (!isProfileReelsAvailable() || profileActivity == null) return;
-        if (dialog_id != UserConfig.getInstance(profileActivity.getCurrentAccount()).getClientUserId()) return;
-        final Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-        picker.addCategory(Intent.CATEGORY_OPENABLE);
-        picker.setType("video/*");
-        picker.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        profileActivity.startActivityForResult(picker, REQUEST_PROFILE_REEL);
-    }
-
-    public void onProfileReelPicked(Uri uri) {
-        if (uri == null || profileActivity == null || dialog_id != UserConfig.getInstance(profileActivity.getCurrentAccount()).getClientUserId()) return;
-        final int account = profileActivity.getCurrentAccount();
-        new ReelsUploadController(profileActivity.getParentActivity(), account, uri, () -> {
-            for (MediaPage page : mediaPages) {
-                if (page != null && page.profileReelsView != null) page.profileReelsView.reload();
-            }
-        }).start();
-    }
-
     protected boolean isArchivedOnlyStoriesView() {
         return false;
     }
@@ -4789,10 +4725,6 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
     }
 
     private void scrollToTop() {
-        if (mediaPages[0].selectedType == TAB_REELS) {
-            if (mediaPages[0].profileReelsView != null) mediaPages[0].profileReelsView.scrollToTop();
-            return;
-        }
         int height;
         switch (mediaPages[0].selectedType) {
             case 0:
@@ -5010,7 +4942,6 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
     }
 
     public boolean isSearchItemVisible(int type) {
-        if (type == TAB_REELS) return false;
         if (type == TAB_GROUPUSERS) {
             return delegate.canSearchMembers();
         }
@@ -7063,21 +6994,6 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
                     }
                 }
             }
-            if (isProfileReelsAvailable()) {
-                int postsIndex = -1;
-                for (int i = 0; i < tabs.size(); i++) {
-                    if (tabs.get(i).first == TAB_PHOTOVIDEO) {
-                        postsIndex = i;
-                        tabs.set(i, new Pair(TAB_PHOTOVIDEO, getString(R.string.ProfilePosts)));
-                        break;
-                    }
-                }
-                if (postsIndex < 0) {
-                    tabs.add(0, new Pair(TAB_PHOTOVIDEO, getString(R.string.ProfilePosts)));
-                    postsIndex = 0;
-                }
-                tabs.add(postsIndex + 1, new Pair(TAB_REELS, getString(R.string.ShortsTitle)));
-            }
             if (hasGifts) {
                 tabs.add(new Pair(TAB_GIFTS, TextUtils.concat(getString(R.string.ProfileGifts), giftsContainer.getLastEmojis(null))));
                 giftsLastHash = giftsContainer.getLastEmojisHash();
@@ -7211,15 +7127,6 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
             mediaPages[a].listView.stopScroll();
         }
         int a = animated ? 1 : 0;
-        if (mediaPages[a].selectedType == TAB_REELS) {
-            mediaPages[a].listView.setVisibility(View.GONE);
-            mediaPages[a].animationSupportingListView.setVisibility(View.GONE);
-            if (mediaPages[a].fastScrollHintView != null) mediaPages[a].fastScrollHintView.setVisibility(View.GONE);
-            final ReelsProfileGridView reelsView = ensureProfileReelsView(mediaPages[a]);
-            if (reelsView != null) reelsView.setVisibility(View.VISIBLE);
-            return;
-        }
-        if (mediaPages[a].profileReelsView != null) mediaPages[a].profileReelsView.setVisibility(View.GONE);
         mediaPages[a].listView.setVisibility(View.VISIBLE);
         FrameLayout.LayoutParams layoutParams = (LayoutParams) mediaPages[a].getLayoutParams();
         layoutParams.topMargin = dp(mediaPageTopMargin());

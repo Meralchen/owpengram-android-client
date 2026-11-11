@@ -47,6 +47,7 @@ import org.telegram.tgnet.tl.legacy.TL_legacy_message;
 import org.telegram.tgnet.tl.TL_payments;
 import org.telegram.tgnet.tl.TL_stars;
 import org.telegram.tgnet.tl.TL_stats;
+import org.telegram.tgnet.tl.TL_reels;
 import org.telegram.tgnet.tl.TL_stories;
 import org.telegram.ui.Components.poll.PollAttachedMediaPack;
 import org.telegram.ui.Stories.MessageMediaStoryFull;
@@ -31127,6 +31128,8 @@ public class TLRPC {
                     return new TL_update.TL_updateReadChannelOutbox();
                 case TL_update.TL_updateChannelUserTyping.constructor:
                     return new TL_update.TL_updateChannelUserTyping();
+                case TL_reels.TL_updateReelActivity.constructor:
+                    return new TL_reels.TL_updateReelActivity();
                 case TL_update.TL_updateStoryID.constructor:
                     return new TL_update.TL_updateStoryID();
                 case TL_update.TL_updateStickerSets.constructor:

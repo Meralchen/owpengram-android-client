@@ -1,84 +1,138 @@
 package org.telegram.ui.Components.Reels;
 
-import android.net.Uri;
 import android.text.TextUtils;
-import android.util.SparseArray;
 
-import org.json.JSONArray;
-import org.json.JSONException;
-import org.json.JSONObject;
-import org.telegram.messenger.AndroidUtilities;
-import org.telegram.messenger.ChatObject;
-import org.telegram.messenger.MessageObject;
-import org.telegram.messenger.MessagesController;
-import org.telegram.messenger.Utilities;
 import org.telegram.tgnet.ConnectionsManager;
+import org.telegram.messenger.MessagesController;
 import org.telegram.tgnet.TLObject;
 import org.telegram.tgnet.TLRPC;
+import org.telegram.tgnet.tl.TL_reels;
 
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.regex.Pattern;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
 
 /**
- * The public horizontal feed and profile-Reel interactions use REST. Channel-backed items
- * resolve to normal MTProto messages and keep their existing reaction/discussion RPCs.
+ * Reels data source. Everything goes through the account's MTProto session via
+ * {@code reels.*}; there is no HTTP transport and no channel lookup here.
  */
 public final class ReelsRepository {
 
-    public static final int PAGE_SIZE = 20;
-
-    private static final Pattern USERNAME = Pattern.compile("[A-Za-z][A-Za-z0-9_]{2,31}");
-
-    public interface FeedCallback {
-        void onPage(ArrayList<ReelsItem> items, boolean endReached, TLRPC.TL_error error);
+    public interface PageCallback {
+        void onPage(List<ReelsItem> items, boolean endReached, ReelsError error);
     }
 
-    public interface ReactionCallback {
-        void onResult(ReelsItem item, TLRPC.TL_error error);
+    public interface ItemCallback {
+        void onItem(ReelsItem item, ReelsError error);
     }
 
-    public interface LinkCallback {
-        int NOT_FOUND = 1;
-        int NO_ACCESS = 2;
-
-        void onResult(ReelsItem item, int failure);
+    public interface CreatorCallback {
+        void onCreator(CreatorInfo creator, ReelsError error);
     }
 
-    public static final class Discussion {
-        public TLRPC.InputPeer peer;
-        public long dialogId;
-        public int rootId;
-        public boolean canWrite;
+    public interface FollowCallback {
+        void onFollow(FollowResult result, ReelsError error);
     }
 
-    public interface DiscussionCallback {
-        void onResult(Discussion discussion, TLRPC.TL_error error);
+    public interface ItemActionCallback {
+        void onResult(ReelsItem item, ReelsError error);
+    }
+
+    public interface CommentsCallback {
+        void onComments(CommentsPage page, ReelsError error);
     }
 
     public interface RepliesCallback {
-        void onResult(ArrayList<MessageObject> replies, boolean endReached, TLRPC.TL_error error);
+        void onReplies(RepliesPage page, ReelsError error);
     }
 
+    public interface CommentCallback {
+        void onComment(ReelsComment comment, ReelsError error);
+    }
+
+    public interface CommentActionCallback {
+        void onResult(ReelsComment comment, ReelsError error);
+    }
+
+    public interface ActionCallback {
+        void onResult(ReelsError error);
+    }
+
+    public interface GifCallback {
+        void onGif(GifUpload gif, ReelsError error);
+    }
+
+    public static final class CreatorInfo {
+        public long userId;
+        public String username;
+        public String displayName;
+        public int reels;
+        public int followers;
+        public int following;
+        public boolean isFollowing;
+        public boolean isSelf;
+    }
+
+    public static final class FollowResult {
+        public boolean following;
+        public int followers;
+        public int followingCount;
+    }
+
+    public static final class CommentsPage {
+        public final ArrayList<ReelsComment> pinned = new ArrayList<>();
+        public final ArrayList<ReelsComment> items = new ArrayList<>();
+        public Long nextBefore;
+    }
+
+    public static final class RepliesPage {
+        public final ArrayList<ReelsComment> items = new ArrayList<>();
+        public Long nextAfter;
+    }
+
+    public static final class GifUpload {
+        public String id;
+        public String url;
+        public int width;
+        public int height;
+        /** Durable document reference sent with reels.sendComment. */
+        public TLRPC.InputDocument input;
+    }
+
+    private static final int PAGE_SIZE = 20;
+    private static final int COMMENT_PAGE_SIZE = 30;
+
     private final int account;
-
-    private String nextCursor;
-    private boolean loading;
+    private ReelsFeedSource source = ReelsFeedSource.FOR_YOU;
+    private String username;
+    private String cursor;
+    private int offset;
     private boolean endReached;
-    private int requestGeneration;
+    private boolean loading;
+    private int generation;
 
-    /** Clip -> desired liked state while a sendReaction for it is in flight. */
-    private final SparseArray<Boolean> pendingLikes = new SparseArray<>();
-    private final SparseArray<Boolean> inFlightLikes = new SparseArray<>();
+    private final HashMap<String, TLRPC.User> creatorUsers = new HashMap<>();
+    private final HashSet<String> likeInFlight = new HashSet<>();
+    private final HashSet<String> savedInFlight = new HashSet<>();
+    private final HashSet<String> followInFlight = new HashSet<>();
 
     public ReelsRepository(int account) {
         this.account = account;
     }
 
-    private MessagesController controller() {
-        return MessagesController.getInstance(account);
+    public void setSource(ReelsFeedSource source, String username) {
+        generation++;
+        this.source = source == null ? ReelsFeedSource.FOR_YOU : source;
+        this.username = username;
+        cursor = null;
+        offset = 0;
+        endReached = false;
+        loading = false;
+    }
+
+    public ReelsFeedSource getSource() {
+        return source;
     }
 
     public boolean isLoading() {
@@ -89,357 +143,532 @@ public final class ReelsRepository {
         return endReached;
     }
 
-    public void resetFeed() {
-        requestGeneration++;
-        nextCursor = null;
-        loading = false;
-        endReached = false;
-    }
-
-    /** A linked item is already inserted as page zero; REST feed pagination remains opaque. */
-    public void startAfter(ReelsItem item) {
-        endReached = false;
-    }
-
-    public void loadNextPage(FeedCallback callback) {
+    public void loadNextPage(PageCallback callback) {
+        if (source == ReelsFeedSource.SINGLE) {
+            callback.onPage(new ArrayList<>(), true, null);
+            return;
+        }
         if (loading || endReached) {
             return;
         }
+        final int requestGeneration = generation;
         loading = true;
-        final int generation = requestGeneration;
-        String path = "/api/reels/feed?limit=" + PAGE_SIZE;
-        if (nextCursor != null) {
-            try {
-                path += "&cursor=" + URLEncoder.encode(nextCursor, StandardCharsets.UTF_8.name());
-            } catch (Exception e) {
-                loading = false;
-                callback.onPage(new ArrayList<>(), endReached, restError(0, "Invalid feed cursor"));
-                return;
+        final TLObject request;
+        switch (source) {
+            case PROFILE: {
+                if (TextUtils.isEmpty(username)) {
+                    loading = false;
+                    callback.onPage(null, false, new ReelsError(400, "A profile Reels source needs a username."));
+                    return;
+                }
+                final TL_reels.getCreatorReels profile = new TL_reels.getCreatorReels();
+                profile.username = username;
+                profile.offset = String.valueOf(offset);
+                profile.limit = PAGE_SIZE;
+                request = profile;
+                break;
+            }
+            case SAVED: {
+                final TL_reels.getSaved saved = new TL_reels.getSaved();
+                saved.offset = String.valueOf(offset);
+                saved.limit = PAGE_SIZE;
+                request = saved;
+                break;
+            }
+            case FOR_YOU:
+            case LATEST:
+            case FOLLOWING:
+            default: {
+                final TL_reels.getFeed feed = new TL_reels.getFeed();
+                feed.for_you = source == ReelsFeedSource.FOR_YOU;
+                feed.latest = source == ReelsFeedSource.LATEST;
+                feed.following = source == ReelsFeedSource.FOLLOWING;
+                feed.offset = cursor == null ? "" : cursor;
+                feed.limit = PAGE_SIZE;
+                request = feed;
+                break;
             }
         }
-        ReelsBackendApi.request(account, "GET", path, null, null, false, (body, status) -> {
-            if (generation != requestGeneration) return;
+        ConnectionsManager.getInstance(account).sendRequest(request, (response, error) -> {
+            if (requestGeneration != generation) {
+                return;
+            }
             loading = false;
-            if (status < 200 || status >= 300 || body == null) {
-                callback.onPage(new ArrayList<>(), endReached, restError(status, "Feed request failed"));
+            final ReelsError failure = ReelsError.fromTl(error);
+            if (failure != null) {
+                callback.onPage(null, false, failure);
                 return;
             }
-            try {
-                final JSONObject response = new JSONObject(body);
-                final JSONArray values = response.optJSONArray("items");
-                if (values == null) {
-                    callback.onPage(new ArrayList<>(), endReached, restError(status, "Feed response has no items"));
-                    return;
-                }
-                nextCursor = response.isNull("nextCursor") ? null : response.optString("nextCursor", null);
-                endReached = nextCursor == null;
-                resolveFeedItems(values, generation, callback);
-            } catch (JSONException e) {
-                callback.onPage(new ArrayList<>(), endReached, restError(status, "Invalid feed response"));
+            if (!(response instanceof TL_reels.ReelsFeed)) {
+                callback.onPage(null, false, new ReelsError(500, "The Reels feed could not be read."));
+                return;
             }
-        });
-    }
-
-    private void resolveFeedItems(JSONArray values, int generation, FeedCallback callback) {
-        final ArrayList<ReelsItem> resolved = new ArrayList<>(Collections.nCopies(values.length(), null));
-        final int[] pending = {0};
-        for (int i = 0; i < values.length(); i++) {
-            final JSONObject value = values.optJSONObject(i);
-            if (value == null) continue;
-            final String source = value.optString("source", "");
-            if ("profile".equals(source)) {
-                resolved.set(i, ReelsItem.fromProfile(account, value));
-                continue;
+            final TL_reels.ReelsFeed feed = (TL_reels.ReelsFeed) response;
+            if (feed instanceof TL_reels.TL_reels_feedNotModified) {
+                endReached = true;
+                callback.onPage(new ArrayList<>(), true, null);
+                return;
             }
-            if (!"channel".equals(source)) continue;
-            final JSONObject channel = value.optJSONObject("channel");
-            final String username = value.optString("channelUsername",
-                    channel != null ? channel.optString("username", "") : "");
-            final int messageId = value.optInt("messageId", value.optInt("message_id", 0));
-            if (!isValidUsername(username) || messageId <= 0) continue;
-            pending[0]++;
-            final int index = i;
-            resolveLink(account, username, messageId, (item, failure) -> {
-                if (item != null) {
-                    item.publicShareUrl = value.optString("shareUrl", "");
-                    resolved.set(index, item);
-                }
-                if (--pending[0] == 0) {
-                    finishResolvedFeed(resolved, generation, callback);
-                }
-            });
-        }
-        if (pending[0] == 0) {
-            finishResolvedFeed(resolved, generation, callback);
-        }
+            final boolean end = advancePagination(feed);
+            callback.onPage(toItems(feed), end, null);
+        }, ConnectionsManager.RequestFlagFailOnServerErrors);
     }
 
-    private void finishResolvedFeed(ArrayList<ReelsItem> resolved, int generation, FeedCallback callback) {
-        if (generation != requestGeneration) return;
-        final ArrayList<ReelsItem> items = new ArrayList<>();
-        for (ReelsItem item : resolved) {
-            if (item != null) items.add(item);
-        }
-        callback.onPage(items, endReached, null);
-    }
-
-    private static TLRPC.TL_error restError(int status, String message) {
-        final TLRPC.TL_error error = new TLRPC.TL_error();
-        error.code = status;
-        error.text = message;
-        return error;
-    }
-
-    /**
-     * Optimistic heart toggle. Requests per clip are serialized: taps while a request is in
-     * flight only update the desired state, which is sent once the previous request returns.
-     */
-    public void setLiked(ReelsItem item, boolean liked, ReactionCallback callback) {
-        if (item.source == ReelsItem.Source.PROFILE) {
-            setProfileLiked(item, liked, callback);
-            return;
-        }
-        if (item.liked != liked) {
-            item.liked = liked;
-            item.likes = Math.max(0, item.likes + (liked ? 1 : -1));
-        }
-
-        if (inFlightLikes.get(item.messageId) != null) {
-            pendingLikes.put(item.messageId, liked);
-            return;
-        }
-        sendReaction(item, liked, callback);
-    }
-
-    private void setProfileLiked(ReelsItem item, boolean liked, ReactionCallback callback) {
-        final boolean previousLiked = item.liked;
-        final int previousCount = item.likes;
-        item.liked = liked;
-        item.likes = Math.max(0, previousCount + (liked == previousLiked ? 0 : liked ? 1 : -1));
-        final JSONObject body = new JSONObject();
+    public void loadSingle(String id, ItemCallback callback) {
+        final long reelId;
         try {
-            body.put("liked", liked);
-        } catch (JSONException e) {
-            item.liked = previousLiked;
-            item.likes = previousCount;
-            callback.onResult(item, restError(0, "Could not create like request"));
+            reelId = Long.parseLong(id);
+        } catch (Exception invalid) {
+            callback.onItem(null, new ReelsError(400, "This Reel link is incomplete."));
             return;
         }
-        final String path = "/api/reels/" + Uri.encode(item.reelId) + "/like";
-        ReelsBackendApi.request(account, "PUT", path, body, null, true, (response, status) -> {
-            if (status >= 200 && status < 300 && response != null) {
-                try {
-                    final JSONObject result = new JSONObject(response);
-                    item.liked = result.optBoolean("liked", liked);
-                    item.likes = result.optInt("likes", result.optInt("likeCount", result.optInt("count", item.likes)));
-                    callback.onResult(item, null);
-                    return;
-                } catch (JSONException ignored) {
-                }
+        final int requestGeneration = generation;
+        final TL_reels.getReel request = new TL_reels.getReel();
+        request.id = reelId;
+        // Zero means "resolve by id": share links carry no access hash yet.
+        request.access_hash = 0;
+        ConnectionsManager.getInstance(account).sendRequest(request, (response, error) -> {
+            if (requestGeneration != generation) {
+                return;
             }
-            item.liked = previousLiked;
-            item.likes = previousCount;
-            callback.onResult(item, restError(status, "Could not update Reel like"));
-        });
+            final ReelsError failure = ReelsError.fromTl(error);
+            if (failure != null) {
+                callback.onItem(null, failure);
+                return;
+            }
+            if (!(response instanceof TL_reels.Reel)) {
+                callback.onItem(null, new ReelsError(404, "This Reel is no longer available."));
+                return;
+            }
+            final TL_reels.Reel reel = (TL_reels.Reel) response;
+            final ReelsItem item = ReelsItem.fromTl(account, reel, ownerFromCache(reel.owner_id));
+            if (item == null) {
+                callback.onItem(null, new ReelsError(404, "This Reel is no longer available."));
+            } else {
+                callback.onItem(item, null);
+            }
+        }, ConnectionsManager.RequestFlagFailOnServerErrors);
     }
 
-    private void sendReaction(ReelsItem item, boolean liked, ReactionCallback callback) {
-        inFlightLikes.put(item.messageId, liked);
-        final TLRPC.TL_messages_sendReaction req = new TLRPC.TL_messages_sendReaction();
-        req.peer = controller().getInputPeer(item.getDialogId());
-        req.msg_id = item.messageId;
-        req.flags |= 1;
-        if (liked) {
-            final TLRPC.TL_reactionEmoji heart = new TLRPC.TL_reactionEmoji();
-            heart.emoticon = ReelsItem.HEART;
-            req.reaction.add(heart);
-        }
-        ConnectionsManager.getInstance(account).sendRequest(req, (response, error) -> {
-            if (response instanceof TLRPC.Updates) {
-                controller().processUpdates((TLRPC.Updates) response, false);
+    public void refreshItem(ReelsItem item, ItemCallback callback) {
+        if (item == null || item.tlId == 0) return;
+        final TL_reels.getReel request = new TL_reels.getReel();
+        request.id = item.tlId;
+        request.access_hash = item.accessHash;
+        ConnectionsManager.getInstance(account).sendRequest(request, (response, error) -> {
+            final ReelsError failure = ReelsError.fromTl(error);
+            if (failure == null && response instanceof TL_reels.Reel) {
+                final ReelsItem fresh = ReelsItem.fromTl(account, (TL_reels.Reel) response, ownerFromCache(item.ownerUserId));
+                if (fresh != null) {
+                    item.copyCountersFrom(fresh);
+                }
             }
-            AndroidUtilities.runOnUIThread(() -> {
-                inFlightLikes.remove(item.messageId);
-                final Boolean pending = pendingLikes.get(item.messageId);
-                pendingLikes.remove(item.messageId);
-                if (error != null) {
-                    if (pending != null && pending != liked) {
-                        sendReaction(item, pending, callback);
-                        return;
-                    }
-                    item.liked = !liked;
-                    item.likes = Math.max(0, item.likes + (liked ? -1 : 1));
-                    callback.onResult(item, error);
+            callback.onItem(item, failure);
+        }, ConnectionsManager.RequestFlagFailOnServerErrors);
+    }
+
+    public void loadCreator(String username, CreatorCallback callback) {
+        if (TextUtils.isEmpty(username)) {
+            callback.onCreator(null, new ReelsError(400, "Creator unavailable."));
+            return;
+        }
+        final TL_reels.getCreator request = new TL_reels.getCreator();
+        request.username = username;
+        ConnectionsManager.getInstance(account).sendRequest(request, (response, error) -> {
+            final ReelsError failure = ReelsError.fromTl(error);
+            if (failure != null) {
+                callback.onCreator(null, failure);
+                return;
+            }
+            if (!(response instanceof TL_reels.ReelsCreator)) {
+                callback.onCreator(null, new ReelsError(500, "Creator details could not be read."));
+                return;
+            }
+            final TL_reels.ReelsCreator creator = (TL_reels.ReelsCreator) response;
+            final CreatorInfo info = new CreatorInfo();
+            if (creator.user != null) {
+                creatorUsers.put(username, creator.user);
+                info.userId = creator.user.id;
+                info.username = creator.user.username;
+                info.displayName = displayName(creator.user);
+            }
+            info.reels = Math.max(0, creator.reels);
+            info.followers = Math.max(0, creator.followers);
+            info.following = Math.max(0, creator.following);
+            info.isFollowing = creator.is_following;
+            info.isSelf = creator.is_self;
+            callback.onCreator(info, null);
+        }, ConnectionsManager.RequestFlagFailOnServerErrors);
+    }
+
+    public void setFollowing(String creatorUsername, boolean following, FollowCallback callback) {
+        if (TextUtils.isEmpty(creatorUsername)) {
+            callback.onFollow(null, new ReelsError(400, "Creator unavailable."));
+            return;
+        }
+        if (!followInFlight.add(creatorUsername)) {
+            return;
+        }
+        final TLRPC.User creator = creatorUsers.get(creatorUsername);
+        if (creator == null) {
+            followInFlight.remove(creatorUsername);
+            loadCreator(creatorUsername, (info, error) -> {
+                if (info == null) {
+                    callback.onFollow(null, error);
                     return;
                 }
-                if (pending != null && pending != liked) {
-                    sendReaction(item, pending, callback);
-                    return;
-                }
-                callback.onResult(item, null);
+                setFollowing(creatorUsername, following, callback);
             });
-        });
-    }
-
-    public boolean hasPendingReaction(ReelsItem item) {
-        return item.source == ReelsItem.Source.CHANNEL && inFlightLikes.get(item.messageId) != null;
-    }
-
-    public void loadDiscussion(ReelsItem item, DiscussionCallback callback) {
-        final TLRPC.TL_messages_getDiscussionMessage req = new TLRPC.TL_messages_getDiscussionMessage();
-        req.peer = controller().getInputPeer(item.getDialogId());
-        req.msg_id = item.messageId;
-        ConnectionsManager.getInstance(account).sendRequest(req, (response, error) -> AndroidUtilities.runOnUIThread(() -> {
-            if (!(response instanceof TLRPC.TL_messages_discussionMessage)) {
-                callback.onResult(null, error);
-                return;
-            }
-            final TLRPC.TL_messages_discussionMessage res = (TLRPC.TL_messages_discussionMessage) response;
-            controller().putUsers(res.users, false);
-            controller().putChats(res.chats, false);
-            TLRPC.Message root = null;
-            for (int i = 0; i < res.messages.size(); i++) {
-                final TLRPC.Message m = res.messages.get(i);
-                if (root == null || m.id < root.id) {
-                    root = m;
-                }
-            }
-            if (root == null) {
-                callback.onResult(null, error);
-                return;
-            }
-            final Discussion discussion = new Discussion();
-            discussion.dialogId = MessageObject.getPeerId(root.peer_id);
-            discussion.peer = controller().getInputPeer(discussion.dialogId);
-            discussion.rootId = root.id;
-            final TLRPC.Chat chat = controller().getChat(-discussion.dialogId);
-            discussion.canWrite = chat != null && ChatObject.canSendMessages(chat);
-            callback.onResult(discussion, null);
-        }));
-    }
-
-    public int loadReplies(Discussion discussion, int offsetId, RepliesCallback callback) {
-        final TLRPC.TL_messages_getReplies req = new TLRPC.TL_messages_getReplies();
-        req.peer = discussion.peer;
-        req.msg_id = discussion.rootId;
-        req.offset_id = offsetId;
-        req.limit = 50;
-        return ConnectionsManager.getInstance(account).sendRequest(req, (response, error) -> AndroidUtilities.runOnUIThread(() -> {
-            if (!(response instanceof TLRPC.messages_Messages)) {
-                callback.onResult(new ArrayList<>(), true, error);
-                return;
-            }
-            final TLRPC.messages_Messages res = (TLRPC.messages_Messages) response;
-            controller().putUsers(res.users, false);
-            controller().putChats(res.chats, false);
-            final ArrayList<MessageObject> replies = new ArrayList<>();
-            for (int i = 0; i < res.messages.size(); i++) {
-                final TLRPC.Message m = res.messages.get(i);
-                if (m instanceof TLRPC.TL_message && m.id != discussion.rootId) {
-                    replies.add(new MessageObject(account, m, false, false));
-                }
-            }
-            callback.onResult(replies, res.messages.size() < req.limit, null);
-        }));
-    }
-
-    public void sendComment(Discussion discussion, String text, Utilities.Callback<TLRPC.TL_error> callback) {
-        final TLRPC.TL_messages_sendMessage req = new TLRPC.TL_messages_sendMessage();
-        req.peer = discussion.peer;
-        req.message = text;
-        req.random_id = Utilities.random.nextLong();
-        final TLRPC.TL_inputReplyToMessage replyTo = new TLRPC.TL_inputReplyToMessage();
-        replyTo.reply_to_msg_id = discussion.rootId;
-        req.reply_to = replyTo;
-        req.flags |= 1;
-        ConnectionsManager.getInstance(account).sendRequest(req, (response, error) -> {
-            if (response instanceof TLRPC.Updates) {
-                controller().processUpdates((TLRPC.Updates) response, false);
-            }
-            AndroidUtilities.runOnUIThread(() -> callback.run(error));
-        });
-    }
-
-    public void exportLink(ReelsItem item, Utilities.Callback<String> callback) {
-        if (item.source != ReelsItem.Source.CHANNEL) {
-            callback.run(null);
             return;
         }
-        final TLRPC.TL_channels_exportMessageLink req = new TLRPC.TL_channels_exportMessageLink();
-        req.channel = controller().getInputChannel(item.channelId);
-        req.id = item.messageId;
-        ConnectionsManager.getInstance(account).sendRequest(req, (response, error) -> AndroidUtilities.runOnUIThread(() ->
-                callback.run(response instanceof TLRPC.TL_exportedMessageLink ? ((TLRPC.TL_exportedMessageLink) response).link : null)));
+        final TL_reels.follow request = new TL_reels.follow();
+        request.user = MessagesController.getInstance(account).getInputUser(creator);
+        request.following = following;
+        ConnectionsManager.getInstance(account).sendRequest(request, (response, error) -> {
+            followInFlight.remove(creatorUsername);
+            final ReelsError failure = ReelsError.fromTl(error);
+            if (failure != null) {
+                callback.onFollow(null, failure);
+                return;
+            }
+            if (!(response instanceof TL_reels.ReelsCreator)) {
+                callback.onFollow(null, new ReelsError(500, "Follow state could not be read."));
+                return;
+            }
+            final TL_reels.ReelsCreator result = (TL_reels.ReelsCreator) response;
+            final FollowResult out = new FollowResult();
+            out.following = result.is_following;
+            out.followers = result.followers;
+            out.followingCount = result.following;
+            callback.onFollow(out, null);
+        }, ConnectionsManager.RequestFlagFailOnServerErrors);
+    }
+
+    public void setLiked(ReelsItem item, boolean liked, ItemActionCallback callback) {
+        if (item == null || item.tlId == 0) return;
+        final boolean previousLiked = item.liked;
+        final long previousLikes = item.likes;
+        item.liked = liked;
+        item.likes = Math.max(0, item.likes + (liked ? 1 : -1));
+        if (!likeInFlight.add(item.id)) {
+            callback.onResult(item, null);
+            return;
+        }
+        final TL_reels.like request = new TL_reels.like();
+        request.id = item.tlId;
+        request.access_hash = item.accessHash;
+        request.liked = liked;
+        ConnectionsManager.getInstance(account).sendRequest(request, (response, error) -> {
+            likeInFlight.remove(item.id);
+            final ReelsError failure = ReelsError.fromTl(error);
+            if (failure == null && response instanceof TL_reels.Reel) {
+                final TL_reels.Reel updated = (TL_reels.Reel) response;
+                item.liked = updated.liked;
+                item.likes = Math.max(0, updated.likes);
+                item.comments = Math.max(0, updated.comments);
+            } else {
+                item.liked = previousLiked;
+                item.likes = previousLikes;
+            }
+            callback.onResult(item, failure);
+        }, ConnectionsManager.RequestFlagFailOnServerErrors);
+    }
+
+    public void setSaved(ReelsItem item, boolean saved, ItemActionCallback callback) {
+        if (item == null || item.tlId == 0) return;
+        final boolean previous = item.saved;
+        item.saved = saved;
+        if (!savedInFlight.add(item.id)) {
+            callback.onResult(item, null);
+            return;
+        }
+        final TL_reels.save request = new TL_reels.save();
+        request.id = item.tlId;
+        request.access_hash = item.accessHash;
+        request.saved = saved;
+        ConnectionsManager.getInstance(account).sendRequest(request, (response, error) -> {
+            savedInFlight.remove(item.id);
+            final ReelsError failure = ReelsError.fromTl(error);
+            if (failure == null && response instanceof TL_reels.Reel) {
+                item.saved = ((TL_reels.Reel) response).saved;
+                item.saves = Math.max(0, ((TL_reels.Reel) response).saves);
+            } else {
+                item.saved = previous;
+            }
+            callback.onResult(item, failure);
+        }, ConnectionsManager.RequestFlagFailOnServerErrors);
+    }
+
+    public void reportView(ReelsItem item, long positionMs, boolean completed) {
+        if (item == null || item.tlId == 0) return;
+        final TL_reels.view request = new TL_reels.view();
+        request.id = item.tlId;
+        request.access_hash = item.accessHash;
+        request.position_ms = (int) Math.max(0, Math.min(Integer.MAX_VALUE, positionMs));
+        request.completed = completed;
+        ConnectionsManager.getInstance(account).sendRequest(request, (response, error) -> {
+        }, ConnectionsManager.RequestFlagDoNotWaitFloodWait);
+    }
+
+    public void reportShare(ReelsItem item) {
+        if (item == null || item.tlId == 0) return;
+        item.shares = Math.max(0, item.shares + 1);
+        final TL_reels.share request = new TL_reels.share();
+        request.id = item.tlId;
+        request.access_hash = item.accessHash;
+        ConnectionsManager.getInstance(account).sendRequest(request, (response, error) -> {
+            if (response instanceof TL_reels.Reel) {
+                item.shares = Math.max(0, ((TL_reels.Reel) response).shares);
+            }
+        }, ConnectionsManager.RequestFlagFailOnServerErrors);
+    }
+
+    public void loadComments(ReelsItem item, Long before, CommentsCallback callback) {
+        if (item == null || item.tlId == 0) {
+            callback.onComments(null, new ReelsError(400, "This Reel is unavailable."));
+            return;
+        }
+        final TL_reels.getComments request = new TL_reels.getComments();
+        request.id = item.tlId;
+        request.access_hash = item.accessHash;
+        request.offset = before == null ? 0 : (int) Math.min(Integer.MAX_VALUE, before);
+        request.limit = COMMENT_PAGE_SIZE;
+        ConnectionsManager.getInstance(account).sendRequest(request, (response, error) -> {
+            final ReelsError failure = ReelsError.fromTl(error);
+            if (failure != null) {
+                callback.onComments(null, failure);
+                return;
+            }
+            if (!(response instanceof TL_reels.ReelsComments)) {
+                callback.onComments(null, new ReelsError(500, "Comments could not be read."));
+                return;
+            }
+            final TL_reels.ReelsComments page = (TL_reels.ReelsComments) response;
+            final HashMap<Long, TLRPC.User> users = usersById(page.users);
+            final CommentsPage out = new CommentsPage();
+            final HashSet<Long> seen = new HashSet<>();
+            for (TL_reels.ReelComment comment : page.comments) {
+                final ReelsComment mapped = ReelsComment.fromTl(account, comment, users.get(comment.user_id));
+                if (mapped == null || !seen.add(mapped.id)) continue;
+                if (comment.pinned) {
+                    out.pinned.add(mapped);
+                } else {
+                    out.items.add(mapped);
+                }
+            }
+            out.nextBefore = page.next_offset > 0 ? (long) page.next_offset : null;
+            callback.onComments(out, null);
+        }, ConnectionsManager.RequestFlagFailOnServerErrors);
+    }
+
+    public void loadReplies(ReelsItem item, long commentId, Long after, RepliesCallback callback) {
+        if (item == null || item.tlId == 0 || commentId <= 0) {
+            callback.onReplies(null, new ReelsError(400, "This comment is unavailable."));
+            return;
+        }
+        final TL_reels.getCommentReplies request = new TL_reels.getCommentReplies();
+        request.id = item.tlId;
+        request.access_hash = item.accessHash;
+        request.comment_id = commentId;
+        request.offset = after == null ? 0 : (int) Math.min(Integer.MAX_VALUE, after);
+        request.limit = COMMENT_PAGE_SIZE;
+        ConnectionsManager.getInstance(account).sendRequest(request, (response, error) -> {
+            final ReelsError failure = ReelsError.fromTl(error);
+            if (failure != null) {
+                callback.onReplies(null, failure);
+                return;
+            }
+            if (!(response instanceof TL_reels.ReelsComments)) {
+                callback.onReplies(null, new ReelsError(500, "Replies could not be read."));
+                return;
+            }
+            final TL_reels.ReelsComments page = (TL_reels.ReelsComments) response;
+            final HashMap<Long, TLRPC.User> users = usersById(page.users);
+            final RepliesPage out = new RepliesPage();
+            final HashSet<Long> seen = new HashSet<>();
+            for (TL_reels.ReelComment comment : page.comments) {
+                final ReelsComment mapped = ReelsComment.fromTl(account, comment, users.get(comment.user_id));
+                if (mapped != null && seen.add(mapped.id)) {
+                    out.items.add(mapped);
+                }
+            }
+            out.nextAfter = page.next_offset > 0 ? (long) page.next_offset : null;
+            callback.onReplies(out, null);
+        }, ConnectionsManager.RequestFlagFailOnServerErrors);
+    }
+
+    public void postComment(ReelsItem item, String text, long parentId, String gifId, String gifUrl,
+                            CommentCallback callback) {
+        postComment(item, text, parentId, null, callback);
+    }
+
+    public void postComment(ReelsItem item, String text, long parentId, TLRPC.InputDocument gif,
+                            CommentCallback callback) {
+        if (item == null || item.tlId == 0) {
+            callback.onComment(null, new ReelsError(400, "This Reel is unavailable."));
+            return;
+        }
+        if (!item.commentsEnabled) {
+            callback.onComment(null, new ReelsError(403, "Comments are turned off."));
+            return;
+        }
+        final TL_reels.sendComment request = new TL_reels.sendComment();
+        request.id = item.tlId;
+        request.access_hash = item.accessHash;
+        request.reply_to = Math.max(0, parentId);
+        request.text = text == null ? "" : text;
+        request.setGif(gif);
+        ConnectionsManager.getInstance(account).sendRequest(request, (response, error) -> {
+            final ReelsError failure = ReelsError.fromTl(error);
+            if (failure != null) {
+                callback.onComment(null, failure);
+                return;
+            }
+            if (!(response instanceof TL_reels.ReelComment)) {
+                callback.onComment(null, new ReelsError(500, "The comment could not be read."));
+                return;
+            }
+            final TL_reels.ReelComment comment = (TL_reels.ReelComment) response;
+            callback.onComment(ReelsComment.fromTl(account, comment, ownerCommentUser(comment.user_id)), null);
+        }, ConnectionsManager.RequestFlagFailOnServerErrors);
+    }
+
+    public void uploadGif(byte[] bytes, GifCallback callback) {
+        ReelsGifUploader.upload(account, bytes, callback);
+    }
+
+    public void deleteComment(ReelsItem item, long commentId, ActionCallback callback) {
+        if (item == null || item.tlId == 0 || commentId <= 0) {
+            callback.onResult(new ReelsError(400, "This comment is unavailable."));
+            return;
+        }
+        final TL_reels.deleteComment request = new TL_reels.deleteComment();
+        request.id = item.tlId;
+        request.access_hash = item.accessHash;
+        request.comment_id = commentId;
+        ConnectionsManager.getInstance(account).sendRequest(request, (response, error) ->
+                callback.onResult(ReelsError.fromTl(error)), ConnectionsManager.RequestFlagFailOnServerErrors);
+    }
+
+    public void likeComment(ReelsItem item, ReelsComment comment, boolean liked, CommentActionCallback callback) {
+        if (item == null || item.tlId == 0 || comment == null) {
+            callback.onResult(null, new ReelsError(400, "This comment is unavailable."));
+            return;
+        }
+        final boolean previousLiked = comment.liked;
+        final long previousLikes = comment.likes;
+        comment.liked = liked;
+        comment.likes = Math.max(0, comment.likes + (liked ? 1 : -1));
+        final TL_reels.likeComment request = new TL_reels.likeComment();
+        request.id = item.tlId;
+        request.access_hash = item.accessHash;
+        request.comment_id = comment.id;
+        request.liked = liked;
+        ConnectionsManager.getInstance(account).sendRequest(request, (response, error) -> {
+            final ReelsError failure = ReelsError.fromTl(error);
+            if (failure == null && response instanceof TL_reels.ReelComment) {
+                final TL_reels.ReelComment updated = (TL_reels.ReelComment) response;
+                comment.liked = updated.liked;
+                comment.likes = Math.max(0, updated.likes);
+            } else {
+                comment.liked = previousLiked;
+                comment.likes = previousLikes;
+            }
+            callback.onResult(comment, failure);
+        }, ConnectionsManager.RequestFlagFailOnServerErrors);
+    }
+
+    public void pinComment(ReelsItem item, ReelsComment comment, boolean pinned, CommentActionCallback callback) {
+        if (item == null || item.tlId == 0 || comment == null) {
+            callback.onResult(null, new ReelsError(400, "This comment is unavailable."));
+            return;
+        }
+        final boolean previous = comment.pinned;
+        comment.pinned = pinned;
+        final TL_reels.pinComment request = new TL_reels.pinComment();
+        request.id = item.tlId;
+        request.access_hash = item.accessHash;
+        request.comment_id = comment.id;
+        request.pinned = pinned;
+        ConnectionsManager.getInstance(account).sendRequest(request, (response, error) -> {
+            final ReelsError failure = ReelsError.fromTl(error);
+            if (failure != null) {
+                comment.pinned = previous;
+            } else if (response instanceof TL_reels.ReelComment) {
+                comment.pinned = ((TL_reels.ReelComment) response).pinned;
+            }
+            callback.onResult(comment, failure);
+        }, ConnectionsManager.RequestFlagFailOnServerErrors);
     }
 
     public void cancel() {
-        requestGeneration++;
+        generation++;
         loading = false;
     }
 
-    public static boolean isValidUsername(String username) {
-        return username != null && USERNAME.matcher(username).matches();
-    }
-
-    /**
-     * /{username}/v/{messageId}: resolve the public channel, then load exactly that message
-     * and require a playable video from that channel.
-     */
-    public static void resolveLink(int account, String username, int messageId, LinkCallback callback) {
-        final MessagesController controller = MessagesController.getInstance(account);
-        final TLRPC.TL_contacts_resolveUsername req = new TLRPC.TL_contacts_resolveUsername();
-        req.username = username;
-        ConnectionsManager.getInstance(account).sendRequest(req, (response, error) -> AndroidUtilities.runOnUIThread(() -> {
-            if (!(response instanceof TLRPC.TL_contacts_resolvedPeer)) {
-                callback.onResult(null, LinkCallback.NOT_FOUND);
-                return;
-            }
-            final TLRPC.TL_contacts_resolvedPeer res = (TLRPC.TL_contacts_resolvedPeer) response;
-            controller.putUsers(res.users, false);
-            controller.putChats(res.chats, false);
-            if (!(res.peer instanceof TLRPC.TL_peerChannel)) {
-                callback.onResult(null, LinkCallback.NOT_FOUND);
-                return;
-            }
-            final TLRPC.Chat chat = controller.getChat(res.peer.channel_id);
-            if (chat == null || !ChatObject.isChannel(chat)) {
-                callback.onResult(null, LinkCallback.NOT_FOUND);
-                return;
-            }
-            loadClip(account, chat.id, messageId, callback);
-        }));
-    }
-
-    public static void loadClip(int account, long channelId, int messageId, LinkCallback callback) {
-        final MessagesController controller = MessagesController.getInstance(account);
-        final TLRPC.TL_channels_getMessages req = new TLRPC.TL_channels_getMessages();
-        req.channel = controller.getInputChannel(channelId);
-        req.id.add(messageId);
-        ConnectionsManager.getInstance(account).sendRequest(req, (TLObject response, TLRPC.TL_error error) -> AndroidUtilities.runOnUIThread(() -> {
-            if (!(response instanceof TLRPC.messages_Messages)) {
-                callback.onResult(null, isAccessError(error) ? LinkCallback.NO_ACCESS : LinkCallback.NOT_FOUND);
-                return;
-            }
-            final TLRPC.messages_Messages res = (TLRPC.messages_Messages) response;
-            controller.putUsers(res.users, false);
-            controller.putChats(res.chats, false);
-            for (int i = 0; i < res.messages.size(); i++) {
-                final TLRPC.Message m = res.messages.get(i);
-                if (m.id == messageId && m.peer_id != null && m.peer_id.channel_id == channelId) {
-                    final ReelsItem item = ReelsItem.from(account, m);
-                    callback.onResult(item, item != null ? 0 : LinkCallback.NOT_FOUND);
-                    return;
-                }
-            }
-            callback.onResult(null, LinkCallback.NOT_FOUND);
-        }));
-    }
-
-    private static boolean isAccessError(TLRPC.TL_error error) {
-        if (error == null || error.text == null) {
-            return false;
+    private boolean advancePagination(TL_reels.ReelsFeed feed) {
+        if (source.isGlobalFeed()) {
+            final String next = TextUtils.isEmpty(feed.next_offset) ? null : feed.next_offset;
+            cursor = next;
+            return TextUtils.isEmpty(next);
         }
-        return error.text.startsWith("CHANNEL_PRIVATE") || error.text.startsWith("CHANNEL_PUBLIC_GROUP_NA")
-                || error.text.startsWith("CHAT_FORBIDDEN") || error.text.startsWith("USER_BANNED_IN_CHANNEL");
+        final int next;
+        try {
+            next = Integer.parseInt(feed.next_offset);
+        } catch (Exception invalid) {
+            return true;
+        }
+        if (next <= offset) {
+            return true;
+        }
+        offset = next;
+        return false;
+    }
+
+    private ArrayList<ReelsItem> toItems(TL_reels.ReelsFeed feed) {
+        final ArrayList<ReelsItem> result = new ArrayList<>();
+        final HashMap<Long, TLRPC.User> users = usersById(feed.users);
+        for (TL_reels.Reel reel : feed.reels) {
+            final TLRPC.User owner = users.get(reel.owner_id);
+            if (owner != null) {
+                creatorUsers.put(owner.username, owner);
+            }
+            final ReelsItem item = ReelsItem.fromTl(account, reel, owner);
+            if (item != null) {
+                result.add(item);
+            }
+        }
+        return result;
+    }
+
+    private TLRPC.User ownerFromCache(long userId) {
+        return MessagesController.getInstance(account).getUser(userId);
+    }
+
+    private TLRPC.User ownerCommentUser(long userId) {
+        return MessagesController.getInstance(account).getUser(userId);
+    }
+
+    private static HashMap<Long, TLRPC.User> usersById(ArrayList<TLRPC.User> users) {
+        final HashMap<Long, TLRPC.User> map = new HashMap<>();
+        if (users == null) return map;
+        for (TLRPC.User user : users) {
+            if (user != null) {
+                map.put(user.id, user);
+            }
+        }
+        return map;
+    }
+
+    private static String displayName(TLRPC.User user) {
+        final StringBuilder builder = new StringBuilder();
+        if (!TextUtils.isEmpty(user.first_name)) {
+            builder.append(user.first_name);
+        }
+        if (!TextUtils.isEmpty(user.last_name)) {
+            if (builder.length() > 0) builder.append(' ');
+            builder.append(user.last_name);
+        }
+        return builder.length() == 0 ? user.username : builder.toString();
     }
 }

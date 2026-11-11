@@ -1,221 +1,187 @@
 package org.telegram.ui.Components.Reels;
 
-import android.net.Uri;
 import android.text.TextUtils;
 
-import org.json.JSONObject;
-import org.telegram.messenger.FileLoader;
-import org.telegram.messenger.FileLog;
-import org.telegram.messenger.MessageObject;
 import org.telegram.tgnet.TLRPC;
-import org.telegram.ui.Components.VideoPlayer;
+import org.telegram.tgnet.tl.TL_reels;
+
+import java.util.Locale;
 
 /**
- * A Reel is either a channel message or a profile-owned REST record. Only channel items
- * have a channel/message identity; profile items use their opaque Reel ID.
+ * A permanent, profile-owned Reel. There is deliberately no channel or message
+ * identity here, and no HTTP URL: media is a Telegram document streamed over
+ * the account's MTProto connection.
  */
 public final class ReelsItem {
 
-    public enum Source { CHANNEL, PROFILE }
+    public final String id;
+    public final String ownerUsername;
+    public final String ownerDisplayName;
+    public final long ownerUserId;
+    public final String mediaUrl;
+    public final String thumbnailUrl;
+    public final String shareUrl;
+    public final String caption;
+    public final int durationSeconds;
+    public final int width;
+    public final int height;
+    public final long createdAtMs;
+    public final boolean commentsEnabled;
 
-    public static final String HEART = "\u2764";
+    /** Wire identity: reel id/access hash are needed by every reels.* call. */
+    public final long tlId;
+    public final long accessHash;
+    /** The backing video document; null for pre-migration Reels. */
+    public final TLRPC.Document media;
+    public final TLRPC.PhotoSize thumb;
 
-    public final int account;
-    public final Source source;
-    public final long channelId;
-    public final int messageId;
-    public final MessageObject messageObject;
-    public final TLRPC.Document document;
-    public String reelId;
-    public String mediaUrl;
-    public String thumbnailUrl;
-    public String creatorName;
-    public String creatorUsername;
-    public String playbackAuthorizationHeader;
-    private String profileCaption;
-    private double profileDuration;
-    private int profileWidth;
-    private int profileHeight;
-    /** Canonical public-profile API share URL, when this item came from a profile grid. */
-    public String publicShareUrl;
-
-    /** next_rate or cursor marker. */
-    public int pageRate;
-
+    public long views;
+    public long likes;
+    public long comments;
+    public long saves;
+    public long shares;
     public boolean liked;
-    public int likes;
-    public int views;
-    public int comments;
-    public boolean commentsEnabled;
-
-    /** Position the user last watched, restored when the page comes back. */
+    public boolean saved;
+    public boolean following;
     public long resumePositionMs;
 
-    ReelsItem(int account, TLRPC.Message message, TLRPC.Document document) {
-        this.account = account;
-        this.source = Source.CHANNEL;
-        this.channelId = message.peer_id.channel_id;
-        this.messageId = message.id;
-        this.messageObject = new MessageObject(account, message, false, false);
-        this.document = document;
-        applyMessage(message);
-    }
-
-    private ReelsItem(int account, String reelId) {
-        this.account = account;
-        this.source = Source.PROFILE;
-        this.channelId = 0;
-        this.messageId = 0;
-        this.messageObject = null;
-        this.document = null;
-        this.reelId = reelId;
-        this.commentsEnabled = true;
-    }
-
-    public static ReelsItem from(int account, TLRPC.Message message) {
-        if (!(message instanceof TLRPC.TL_message) || message.peer_id == null || message.peer_id.channel_id == 0) {
-            return null;
+    /** Pixel size of a document, from whichever size attribute the upload carries. */
+    static int[] documentSize(TLRPC.Document document) {
+        if (document == null || document.attributes == null) {
+            return new int[]{0, 0};
         }
-        final TLRPC.Document document = playableVideo(message);
-        if (document == null) {
-            return null;
-        }
-        return new ReelsItem(account, message, document);
-    }
-
-    /** Parses a profile-owned Reel without inventing a channel peer or MTProto message ID. */
-    public static ReelsItem fromProfile(int account, JSONObject object) {
-        if (object == null) return null;
-        String id = object.optString("id", "");
-        String media = object.optString("mediaUrl", "");
-        if (TextUtils.isEmpty(id) || TextUtils.isEmpty(media)) return null;
-        ReelsItem item = new ReelsItem(account, id);
-        item.mediaUrl = ReelsBackendApi.absoluteUrl(account, media);
-        item.thumbnailUrl = ReelsBackendApi.absoluteUrl(account, object.optString("thumbnailUrl", null));
-        item.profileCaption = object.optString("caption", "");
-        item.profileDuration = object.optDouble("duration", 0);
-        item.profileWidth = object.optInt("width", 0);
-        item.profileHeight = object.optInt("height", 0);
-        item.likes = object.optInt("likes", object.optInt("likeCount", 0));
-        item.comments = object.optInt("comments", object.optInt("commentCount", 0));
-        item.views = object.optInt("views", object.optInt("viewCount", 0));
-        item.liked = object.optBoolean("liked", false);
-        JSONObject owner = object.optJSONObject("owner");
-        if (owner == null) owner = object.optJSONObject("creator");
-        if (owner == null) owner = object.optJSONObject("profile");
-        if (owner != null) {
-            item.creatorName = owner.optString("displayName", owner.optString("name", owner.optString("title", "")));
-            item.creatorUsername = owner.optString("username", "");
-        }
-        if (TextUtils.isEmpty(item.creatorName)) item.creatorName = object.optString("creatorName", "");
-        if (TextUtils.isEmpty(item.creatorUsername)) item.creatorUsername = object.optString("creatorUsername", "");
-        item.publicShareUrl = object.optString("shareUrl", "");
-        return item.mediaUrl != null ? item : null;
-    }
-
-    /** A regular video document: not a round video, voice note or animated GIF. */
-    public static TLRPC.Document playableVideo(TLRPC.Message message) {
-        if (message == null || !(message.media instanceof TLRPC.TL_messageMediaDocument)) {
-            return null;
-        }
-        final TLRPC.Document document = message.media.document;
-        if (document == null || document instanceof TLRPC.TL_documentEmpty) {
-            return null;
-        }
-        boolean video = false;
-        for (int i = 0; i < document.attributes.size(); i++) {
-            final TLRPC.DocumentAttribute attribute = document.attributes.get(i);
-            if (attribute instanceof TLRPC.TL_documentAttributeVideo) {
-                if (attribute.round_message) {
-                    return null;
+        for (TLRPC.DocumentAttribute attribute : document.attributes) {
+            if (attribute instanceof TLRPC.TL_documentAttributeImageSize) {
+                final TLRPC.TL_documentAttributeImageSize size = (TLRPC.TL_documentAttributeImageSize) attribute;
+                if (size.w > 0 && size.h > 0) {
+                    return new int[]{size.w, size.h};
                 }
-                video = true;
-            } else if (attribute instanceof TLRPC.TL_documentAttributeAnimated
-                    || attribute instanceof TLRPC.TL_documentAttributeAudio) {
-                return null;
+            } else if (attribute instanceof TLRPC.TL_documentAttributeVideo) {
+                final TLRPC.TL_documentAttributeVideo video = (TLRPC.TL_documentAttributeVideo) attribute;
+                if (video.w > 0 && video.h > 0) {
+                    return new int[]{video.w, video.h};
+                }
             }
         }
-        if (!video || (document.mime_type != null && !document.mime_type.startsWith("video/"))) {
+        return new int[]{0, 0};
+    }
+
+    private ReelsItem(String id, long tlId, long accessHash, String ownerUsername, String ownerDisplayName,
+                      long ownerUserId, String mediaUrl, String thumbnailUrl, String shareUrl, String caption,
+                      int durationSeconds, int width, int height, long createdAtMs, boolean commentsEnabled,
+                      TLRPC.Document media, TLRPC.PhotoSize thumb) {
+        this.id = id;
+        this.tlId = tlId;
+        this.accessHash = accessHash;
+        this.ownerUsername = ownerUsername;
+        this.ownerDisplayName = ownerDisplayName;
+        this.ownerUserId = ownerUserId;
+        this.mediaUrl = mediaUrl;
+        this.thumbnailUrl = thumbnailUrl;
+        this.shareUrl = shareUrl;
+        this.caption = caption;
+        this.durationSeconds = durationSeconds;
+        this.width = width;
+        this.height = height;
+        this.createdAtMs = createdAtMs;
+        this.commentsEnabled = commentsEnabled;
+        this.media = media;
+        this.thumb = thumb;
+    }
+
+    /** Builds a Reel from its MTProto projection plus the owner the feed shipped with it. */
+    public static ReelsItem fromTl(int account, TL_reels.Reel reel, TLRPC.User owner) {
+        if (reel == null || reel.id == 0) {
             return null;
         }
-        return document;
-    }
-
-    public long getDialogId() {
-        return source == Source.CHANNEL ? -channelId : 0;
-    }
-
-    public TLRPC.Message getMessage() {
-        return messageObject != null ? messageObject.messageOwner : null;
-    }
-
-    public void applyMessage(TLRPC.Message message) {
-        if (message == null) return;
-        views = message.views;
-        comments = message.replies != null ? message.replies.replies : 0;
-        commentsEnabled = message.replies != null && message.replies.comments;
-        applyReactions(message.reactions);
-    }
-
-    public void applyReactions(TLRPC.TL_messageReactions reactions) {
-        if (getMessage() != null) getMessage().reactions = reactions;
-        liked = false;
-        likes = 0;
-        if (reactions == null) {
-            return;
+        final String id = Long.toString(reel.id);
+        final String username = owner != null && !TextUtils.isEmpty(owner.username) ? owner.username : null;
+        final String displayName = owner != null ? displayName(owner) : username;
+        TLRPC.Document document = null;
+        if (reel.media instanceof TLRPC.TL_document && reel.media.id != 0) {
+            document = (TLRPC.Document) reel.media;
         }
-        for (int i = 0; i < reactions.results.size(); i++) {
-            final TLRPC.ReactionCount count = reactions.results.get(i);
-            if (isHeart(count.reaction)) {
-                likes = count.count;
-                liked = count.chosen;
+        final TLRPC.PhotoSize thumb = document == null ? null : firstThumb(document);
+        final ReelsItem item = new ReelsItem(
+                id,
+                reel.id,
+                reel.access_hash,
+                username,
+                TextUtils.isEmpty(displayName) ? username : displayName,
+                reel.owner_id,
+                ReelsCache.streamUri(account, document),
+                null,
+                ReelsCache.shareUrl(account, id),
+                reel.caption == null ? "" : reel.caption,
+                Math.max(0, reel.duration),
+                Math.max(0, reel.width),
+                Math.max(0, reel.height),
+                reel.created_at > 0 ? reel.created_at * 1000L : 0,
+                reel.comments_enabled,
+                document,
+                thumb
+        );
+        item.views = Math.max(0, reel.views);
+        item.likes = Math.max(0, reel.likes);
+        item.comments = Math.max(0, reel.comments);
+        item.saves = Math.max(0, reel.saves);
+        item.shares = Math.max(0, reel.shares);
+        item.liked = reel.liked;
+        item.saved = reel.saved;
+        item.following = reel.following;
+        return item;
+    }
+
+    private static String displayName(TLRPC.User user) {
+        final StringBuilder builder = new StringBuilder();
+        if (!TextUtils.isEmpty(user.first_name)) {
+            builder.append(user.first_name);
+        }
+        if (!TextUtils.isEmpty(user.last_name)) {
+            if (builder.length() > 0) {
+                builder.append(' ');
+            }
+            builder.append(user.last_name);
+        }
+        return builder.length() == 0 ? user.username : builder.toString();
+    }
+
+    private static TLRPC.PhotoSize firstThumb(TLRPC.Document document) {
+        if (document.thumbs == null || document.thumbs.isEmpty()) {
+            return null;
+        }
+        TLRPC.PhotoSize best = null;
+        for (TLRPC.PhotoSize size : document.thumbs) {
+            if (size == null || size instanceof TLRPC.TL_photoSizeEmpty) {
+                continue;
+            }
+            if (best == null || size.w > best.w) {
+                best = size;
             }
         }
+        return best;
     }
 
-    public static boolean isHeart(TLRPC.Reaction reaction) {
-        if (!(reaction instanceof TLRPC.TL_reactionEmoji)) {
-            return false;
+    public void copyCountersFrom(ReelsItem other) {
+        if (other == null) return;
+        views = other.views;
+        likes = other.likes;
+        comments = other.comments;
+        saves = other.saves;
+        shares = other.shares;
+        liked = other.liked;
+        saved = other.saved;
+        following = other.following;
+    }
+
+    public boolean hasPlayableMedia() {
+        return !TextUtils.isEmpty(mediaUrl);
+    }
+
+    public String initial() {
+        if (!TextUtils.isEmpty(ownerDisplayName)) {
+            return ownerDisplayName.substring(0, 1).toUpperCase(Locale.US);
         }
-        final String emoticon = ((TLRPC.TL_reactionEmoji) reaction).emoticon;
-        return emoticon != null && emoticon.replace("\uFE0F", "").equals(HEART);
-    }
-
-    public double getDuration() {
-        return source == Source.PROFILE ? profileDuration : MessageObject.getDocumentDuration(document);
-    }
-
-    public int getVideoWidth() {
-        return source == Source.PROFILE ? profileWidth : MessageObject.getVideoWidth(document);
-    }
-
-    public int getVideoHeight() {
-        return source == Source.PROFILE ? profileHeight : MessageObject.getVideoHeight(document);
-    }
-
-    public String getCaption() {
-        if (source == Source.PROFILE) return TextUtils.isEmpty(profileCaption) ? null : profileCaption;
-        final String text = getMessage().message;
-        return TextUtils.isEmpty(text) ? null : text;
-    }
-
-    /**
-     * tg:// URI resolved by {@link org.telegram.messenger.FileStreamLoadOperation}
-     * through upload.getFile; the registered parent lets FileRefController refresh
-     * an expired file reference.
-     */
-    public Uri mtprotoUri() {
-        if (source != Source.CHANNEL) return null;
-        try {
-            final int reference = FileLoader.getInstance(account).getFileReference(messageObject);
-            return VideoPlayer.VideoUri.getUri(account, document, reference);
-        } catch (Exception e) {
-            FileLog.e(e);
-            return null;
-        }
-    }
-
-    public String cacheKey() {
-        return source == Source.PROFILE ? ReelsCache.profileKey(account, reelId) : ReelsCache.keyPrefix(account) + document.id;
+        return "?";
     }
 }

@@ -128,8 +128,7 @@ import org.telegram.messenger.MessagesStorage;
 import org.telegram.messenger.NotificationCenter;
 import org.telegram.owpengram.OwpengramServer;
 import org.telegram.owpengram.OwpengramServers;
-import org.telegram.ui.Components.Reels.ReelsViewer;
-import org.telegram.ui.Components.Reels.ReelsRepository;
+import org.telegram.ui.Components.Reels.ReelsStoryViewer;
 import org.telegram.messenger.NotificationsController;
 import org.telegram.messenger.OpenAttachedMenuBotReceiver;
 import org.telegram.messenger.PushListenerController;
@@ -1326,60 +1325,27 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
         return false;
     }
 
+    private boolean openReelLink(Uri uri, int account, Browser.Progress progress) {
+        final List<String> path = uri.getPathSegments();
+        if (path == null || path.size() != 2 || !"r".equals(path.get(0))) {
+            return false;
+        }
+        final String reelId = path.get(1);
+        if (TextUtils.isEmpty(reelId)) {
+            return false;
+        }
+        if (progress != null) {
+            progress.end();
+        }
+        presentFragment(new ReelsStoryViewer(reelId));
+        return true;
+    }
+
     /**
      * Opens https://{server-public-host}/{username}/v/{messageId} (and the equivalent owpg:// link,
      * already normalized to the same path). Identity comes only from the path; the clip is shown
      * only after the channel and the exact message were loaded through the account's MTProto session.
      */
-    private boolean openShortVideoLink(Uri uri, int account, Browser.Progress progress) {
-        final List<String> path = uri.getPathSegments();
-        if (path == null || path.size() != 3 || !"v".equals(path.get(1))) {
-            return false;
-        }
-        final String username = path.get(0);
-        final int messageId;
-        try {
-            if (!ReelsRepository.isValidUsername(username)) {
-                return false;
-            }
-            messageId = Integer.parseInt(path.get(2));
-            if (messageId <= 0) {
-                return false;
-            }
-        } catch (NumberFormatException invalidId) {
-            return false;
-        }
-
-        final AlertDialog progressDialog;
-        if (progress != null) {
-            progress.init();
-            progressDialog = null;
-        } else {
-            progressDialog = new AlertDialog(this, AlertDialog.ALERT_TYPE_SPINNER);
-            progressDialog.showDelayed(300);
-        }
-        ReelsRepository.resolveLink(account, username, messageId, (item, failure) -> {
-            if (progress != null) {
-                progress.end();
-            }
-            if (progressDialog != null) {
-                try {
-                    progressDialog.dismiss();
-                } catch (Exception ignore) {
-                }
-            }
-            final BaseFragment lastFragment = getLastFragment();
-            if (item == null) {
-                if (lastFragment != null) {
-                    BulletinFactory.of(lastFragment).createErrorBulletin(LocaleController.getString(R.string.ShortsNotFound)).show();
-                }
-                return;
-            }
-            presentFragment(new ReelsViewer(item));
-        });
-        return true;
-    }
-
     /** Shown when an owpg:// link targets a server the user has no account on. */
     private void showOwpengramOtherServerDialog(String host) {
         try {
@@ -2254,7 +2220,7 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
                                             data = Uri.parse("https://t.me" + (TextUtils.isEmpty(data.getPath()) ? "/" : data.getPath()) + (TextUtils.isEmpty(data.getQuery()) ? "" : "?" + data.getQuery()));
                                             // /{username}/v/{messageId} is a Shorts clip; it must win over the
                                             // generic /{username}/{messageId} and story branches below.
-                                            if (openShortVideoLink(data, intentAccount[0], progress)) {
+                                            if (openReelLink(data, intentAccount[0], progress)) {
                                                 intent.setAction(null);
                                                 return false;
                                             }
