@@ -57,6 +57,7 @@ public final class ReelsComment {
         if (comment.gif != null && comment.gif.id != 0) {
             gif = comment.gif;
         }
+        final int[] gifSize = ReelsItem.documentSize(gif);
         final ReelsComment result = new ReelsComment(
                 comment.id,
                 comment.user_id,
@@ -66,8 +67,8 @@ public final class ReelsComment {
                 comment.reply_to,
                 gif == null ? null : Long.toString(gif.id),
                 null,
-                gif == null ? 0 : gif.w,
-                gif == null ? 0 : gif.h,
+                gifSize[0],
+                gifSize[1],
                 comment.created_at > 0 ? comment.created_at * 1000L : 0,
                 gif
         );

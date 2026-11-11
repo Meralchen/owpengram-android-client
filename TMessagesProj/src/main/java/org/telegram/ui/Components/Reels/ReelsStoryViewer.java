@@ -495,7 +495,7 @@ public final class ReelsStoryViewer extends BaseFragment implements ReelsStoryPa
         }
         final int height = page.getHeight() > 0
                 ? page.getHeight()
-                : getResources().getDisplayMetrics().heightPixels;
+                : page.getResources().getDisplayMetrics().heightPixels;
         page.animate().cancel();
         page.animate()
                 .scaleX(open ? REELS_COMMENTS_SCALE : 1f)

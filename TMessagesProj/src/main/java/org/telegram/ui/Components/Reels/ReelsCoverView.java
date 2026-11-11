@@ -29,7 +29,6 @@ public final class ReelsCoverView extends FrameLayout {
         super(context);
         setBackgroundColor(0xFF111111);
         imageView = new BackupImageView(context);
-        imageView.setScaleType(android.widget.ImageView.ScaleType.CENTER_CROP);
         addView(imageView, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
 
         initialView = new TextView(context);

@@ -1,6 +1,6 @@
 package org.telegram.ui.Components.Reels;
 
-import org.telegram.messenger.ConnectionsManager;
+import org.telegram.tgnet.ConnectionsManager;
 import org.telegram.messenger.Utilities;
 import org.telegram.tgnet.NativeByteBuffer;
 import org.telegram.tgnet.TLRPC;
@@ -92,10 +92,11 @@ final class ReelsGifUploader {
                 callback.onGif(null, new ReelsError(500, "The GIF could not be uploaded."));
                 return;
             }
+            final int[] size = ReelsItem.documentSize(document);
             final ReelsRepository.GifUpload gif = new ReelsRepository.GifUpload();
             gif.id = Long.toString(document.id);
-            gif.width = document.w;
-            gif.height = document.h;
+            gif.width = size[0];
+            gif.height = size[1];
             gif.input = toInputDocument(document);
             callback.onGif(gif, null);
         }, ConnectionsManager.RequestFlagFailOnServerErrors);

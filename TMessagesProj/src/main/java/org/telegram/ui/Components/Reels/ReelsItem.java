@@ -45,6 +45,27 @@ public final class ReelsItem {
     public boolean following;
     public long resumePositionMs;
 
+    /** Pixel size of a document, from whichever size attribute the upload carries. */
+    static int[] documentSize(TLRPC.Document document) {
+        if (document == null || document.attributes == null) {
+            return new int[]{0, 0};
+        }
+        for (TLRPC.DocumentAttribute attribute : document.attributes) {
+            if (attribute instanceof TLRPC.TL_documentAttributeImageSize) {
+                final TLRPC.TL_documentAttributeImageSize size = (TLRPC.TL_documentAttributeImageSize) attribute;
+                if (size.w > 0 && size.h > 0) {
+                    return new int[]{size.w, size.h};
+                }
+            } else if (attribute instanceof TLRPC.TL_documentAttributeVideo) {
+                final TLRPC.TL_documentAttributeVideo video = (TLRPC.TL_documentAttributeVideo) attribute;
+                if (video.w > 0 && video.h > 0) {
+                    return new int[]{video.w, video.h};
+                }
+            }
+        }
+        return new int[]{0, 0};
+    }
+
     private ReelsItem(String id, long tlId, long accessHash, String ownerUsername, String ownerDisplayName,
                       long ownerUserId, String mediaUrl, String thumbnailUrl, String shareUrl, String caption,
                       int durationSeconds, int width, int height, long createdAtMs, boolean commentsEnabled,

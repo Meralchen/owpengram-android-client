@@ -2,7 +2,7 @@ package org.telegram.ui.Components.Reels;
 
 import android.text.TextUtils;
 
-import org.telegram.messenger.ConnectionsManager;
+import org.telegram.tgnet.ConnectionsManager;
 import org.telegram.messenger.MessagesController;
 import org.telegram.tgnet.TLObject;
 import org.telegram.tgnet.TLRPC;
