@@ -92,11 +92,11 @@ final class ReelsGifUploader {
                 callback.onGif(null, new ReelsError(500, "The GIF could not be uploaded."));
                 return;
             }
-            final int[] size = ReelsItem.documentSize(document);
+            final int[] dimensions = ReelsItem.documentSize(document);
             final ReelsRepository.GifUpload gif = new ReelsRepository.GifUpload();
             gif.id = Long.toString(document.id);
-            gif.width = size[0];
-            gif.height = size[1];
+            gif.width = dimensions[0];
+            gif.height = dimensions[1];
             gif.input = toInputDocument(document);
             callback.onGif(gif, null);
         }, ConnectionsManager.RequestFlagFailOnServerErrors);
