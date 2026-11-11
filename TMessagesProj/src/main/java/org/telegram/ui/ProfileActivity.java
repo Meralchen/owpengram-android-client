@@ -2102,12 +2102,6 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
         mainTabsActivityController = controller;
     }
 
-    public void setReelsViewerActive(boolean active) {
-        if (mainTabsActivityController != null) {
-            mainTabsActivityController.setReelsViewerActive(active);
-        }
-    }
-
     @Override
     public boolean onFragmentCreate() {
         userId = arguments.getLong("user_id", 0);
@@ -2540,6 +2534,15 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
             });
         }
 
+
+        actionBar.createMenu().addItem(0x52454c53, R.drawable.msg_video)
+                .setOnClickListener(v -> {
+                    final TLRPC.UserFull info = getUserInfo();
+                    if (info != null && info.user != null
+                            && !android.text.TextUtils.isEmpty(info.user.username)) {
+                        presentFragment(new org.telegram.ui.Components.Reels.ReelsProfileActivity(info.user.username));
+                    }
+                });
         return actionBar;
     }
 
@@ -8178,8 +8181,6 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
             mediaCounterTextView.setText(LocaleController.formatPluralString("SavedMessagesCount", Math.max(1, messagesCount)));
         } else if (id == SharedMediaLayout.TAB_GIFTS) {
             mediaCounterTextView.setText(LocaleController.formatPluralStringComma("ProfileGiftsCount", sharedMediaLayout.giftsContainer == null ? 0 : sharedMediaLayout.giftsContainer.getGiftsCount()));
-        } else if (id == SharedMediaLayout.TAB_REELS) {
-            mediaCounterTextView.setText(LocaleController.getString(R.string.ShortsTitle));
         } else if (id == SharedMediaLayout.TAB_POLL) {
             if (mediaCount[MediaDataController.MEDIA_POLL] <= 0) {
                 mediaCounterTextView.setText(LocaleController.getString(R.string.SharedPollTab));

@@ -154,7 +154,6 @@ public class MainTabsActivity extends ViewPagerActivity implements NotificationC
     private final BoolAnimator animatorTabsVisible = new BoolAnimator(ANIMATOR_ID_TABS_VISIBLE,
         this, CubicBezierInterpolator.EASE_OUT_QUINT, 380, true);
     private boolean tabsRequestedVisible = true;
-    private boolean reelsViewerActive;
 
 
     private IUpdateLayout updateLayout;
@@ -953,7 +952,8 @@ public class MainTabsActivity extends ViewPagerActivity implements NotificationC
     protected BaseFragment createBaseFragmentAt(int position) {
         final int tabId = tabAtPosition(position);
         if (tabId == TAB_REELS) {
-            final org.telegram.ui.Components.Reels.ReelsViewer reels = new org.telegram.ui.Components.Reels.ReelsViewer();
+            final org.telegram.ui.Components.Reels.ReelsStoryViewer reels =
+                    new org.telegram.ui.Components.Reels.ReelsStoryViewer(org.telegram.ui.Components.Reels.ReelsFeedSource.FOR_YOU);
             reels.setHomeAction(() -> {
                 final int chatsPosition = positionForTab(TAB_CHATS);
                 if (viewPager != null && chatsPosition >= 0) {
@@ -1003,7 +1003,7 @@ public class MainTabsActivity extends ViewPagerActivity implements NotificationC
             }
         }
         final int tabId = tabAtPosition(position);
-        animatorTabsVisible.setValue(!reelsViewerActive && tabId != TAB_REELS
+        animatorTabsVisible.setValue(tabId != TAB_REELS
                 && (tabId != TAB_CHATS || tabsRequestedVisible), animated);
     }
 
@@ -1248,11 +1248,6 @@ public class MainTabsActivity extends ViewPagerActivity implements NotificationC
             selectTab(viewPager != null ? viewPager.getCurrentPosition() : 0, true);
         }
 
-        @Override
-        public void setReelsViewerActive(boolean active) {
-            reelsViewerActive = active;
-            selectTab(viewPager != null ? viewPager.getCurrentPosition() : 0, true);
-        }
     }
 
 

@@ -4,52 +4,58 @@ import android.net.Uri;
 import android.text.TextUtils;
 
 import org.json.JSONArray;
-import org.json.JSONException;
 import org.json.JSONObject;
-import org.telegram.messenger.AndroidUtilities;
-import org.telegram.messenger.ChatObject;
-import org.telegram.messenger.MessageObject;
-import org.telegram.messenger.MessagesController;
-import org.telegram.messenger.Utilities;
-import org.telegram.tgnet.ConnectionsManager;
-import org.telegram.tgnet.TLObject;
-import org.telegram.tgnet.TLRPC;
 
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.regex.Pattern;
+import java.util.List;
 
-/**
- * Reels REST repository. Feed pages are delivered immediately with unresolved channel
- * placeholders; the viewer resolves a small window around the current page. Likes are keyed by
- * the stable server item id, never by a channel-local message id.
- */
+/** REST data source for profile Reels. No channel lookup or MTProto message path lives here. */
 public final class ReelsRepository {
 
-    public static final int PAGE_SIZE = 20;
-
-    public static final String MODE_FOR_YOU = "for_you";
-    public static final String MODE_LATEST = "latest";
-    public static final String MODE_FOLLOWING = "following";
-
-    private static final Pattern USERNAME = Pattern.compile("[A-Za-z][A-Za-z0-9_]{2,31}");
-
-    public interface FeedCallback {
-        void onPage(ArrayList<ReelsItem> items, boolean endReached, TLRPC.TL_error error);
+    public interface PageCallback {
+        void onPage(List<ReelsItem> items, boolean endReached, ReelsError error);
     }
 
-    public interface ReactionCallback {
-        void onResult(ReelsItem item, TLRPC.TL_error error);
+    public interface ItemCallback {
+        void onItem(ReelsItem item, ReelsError error);
     }
 
-    public interface LinkCallback {
-        int NOT_FOUND = 1;
-        int NO_ACCESS = 2;
+    public interface CreatorCallback {
+        void onCreator(CreatorInfo creator, ReelsError error);
+    }
 
-        void onResult(ReelsItem item, int failure);
+    public interface FollowCallback {
+        void onFollow(FollowResult result, ReelsError error);
+    }
+
+    public interface ItemActionCallback {
+        void onResult(ReelsItem item, ReelsError error);
+    }
+
+    public interface CommentsCallback {
+        void onComments(CommentsPage page, ReelsError error);
+    }
+
+    public interface RepliesCallback {
+        void onReplies(RepliesPage page, ReelsError error);
+    }
+
+    public interface CommentCallback {
+        void onComment(ReelsComment comment, ReelsError error);
+    }
+
+    public interface CommentActionCallback {
+        void onResult(ReelsComment comment, ReelsError error);
+    }
+
+    public interface ActionCallback {
+        void onResult(ReelsError error);
+    }
+
+    public interface GifCallback {
+        void onGif(GifUpload gif, ReelsError error);
     }
 
     public static final class CreatorInfo {
@@ -63,50 +69,63 @@ public final class ReelsRepository {
         public boolean isSelf;
     }
 
-    public interface CreatorCallback {
-        void onResult(CreatorInfo info, TLRPC.TL_error error);
+    public static final class FollowResult {
+        public boolean following;
+        public int followers;
+        public int followingCount;
     }
 
-    public interface FollowCallback {
-        void onResult(boolean following, int followers, int followingCount, TLRPC.TL_error error);
+    public static final class CommentsPage {
+        public final ArrayList<ReelsComment> pinned = new ArrayList<>();
+        public final ArrayList<ReelsComment> items = new ArrayList<>();
+        public Long nextBefore;
     }
 
-    public static final class Discussion {
-        public TLRPC.InputPeer peer;
-        public long dialogId;
-        public int rootId;
-        public boolean canWrite;
+    public static final class RepliesPage {
+        public final ArrayList<ReelsComment> items = new ArrayList<>();
+        public Long nextAfter;
     }
 
-    public interface DiscussionCallback {
-        void onResult(Discussion discussion, TLRPC.TL_error error);
-    }
-
-    public interface RepliesCallback {
-        void onResult(ArrayList<MessageObject> replies, boolean endReached, TLRPC.TL_error error);
+    public static final class GifUpload {
+        public String id;
+        public String url;
+        public int width;
+        public int height;
     }
 
     private final int account;
-
-    private String nextCursor;
-    private int nextOffset;
-    private String mode = MODE_FOR_YOU;
-    private String profileUsername;
-    private boolean loading;
+    private ReelsFeedSource source = ReelsFeedSource.FOR_YOU;
+    private String username;
+    private String cursor;
+    private int offset;
     private boolean endReached;
-    private int requestGeneration;
+    private boolean loading;
+    private boolean publicFallback;
+    private int generation;
 
-    /** Stable item id -> desired liked state while a sendReaction for it is in flight. */
-    private final HashMap<String, Boolean> pendingLikes = new HashMap<>();
-    private final HashMap<String, Boolean> inFlightLikes = new HashMap<>();
-    private final HashSet<String> resolvingChannels = new HashSet<>();
+    private final HashMap<String, Boolean> likePending = new HashMap<>();
+    private final HashSet<String> likeInFlight = new HashSet<>();
+    private final HashMap<String, Boolean> savedPending = new HashMap<>();
+    private final HashSet<String> savedInFlight = new HashSet<>();
+    private final HashSet<String> followInFlight = new HashSet<>();
 
     public ReelsRepository(int account) {
         this.account = account;
     }
 
-    private MessagesController controller() {
-        return MessagesController.getInstance(account);
+    public void setSource(ReelsFeedSource source, String username) {
+        generation++;
+        this.source = source == null ? ReelsFeedSource.FOR_YOU : source;
+        this.username = username;
+        cursor = null;
+        offset = 0;
+        endReached = false;
+        loading = false;
+        publicFallback = false;
+    }
+
+    public ReelsFeedSource getSource() {
+        return source;
     }
 
     public boolean isLoading() {
@@ -117,643 +136,548 @@ public final class ReelsRepository {
         return endReached;
     }
 
-    public boolean isProfileFeed() {
-        return !TextUtils.isEmpty(profileUsername);
-    }
-
-    public String getMode() {
-        return mode;
-    }
-
-    public void setMode(String mode) {
-        this.mode = TextUtils.isEmpty(mode) ? MODE_FOR_YOU : mode;
-        this.profileUsername = null;
-        resetFeed();
-    }
-
-    public void setProfile(String username) {
-        this.profileUsername = username;
-        resetFeed();
-    }
-
-    public void resetFeed() {
-        requestGeneration++;
-        nextCursor = null;
-        nextOffset = 0;
-        loading = false;
-        endReached = false;
-    }
-
-    /** A linked item is already inserted as page zero; REST feed pagination remains opaque. */
-    public void startAfter(ReelsItem item) {
-        endReached = false;
-    }
-
-    private String encode(String value) {
-        try {
-            return URLEncoder.encode(value, StandardCharsets.UTF_8.name());
-        } catch (Exception e) {
-            return value;
+    public void loadNextPage(PageCallback callback) {
+        if (source == ReelsFeedSource.SINGLE) {
+            callback.onPage(new ArrayList<>(), true, null);
+            return;
         }
-    }
-
-    private String feedPath() {
-        if (isProfileFeed()) {
-            return "/api/profiles/" + encode(profileUsername) + "/reels?limit=" + PAGE_SIZE + "&offset=" + nextOffset;
-        }
-        String path = "/api/reels/feed?mode=" + encode(mode) + "&limit=" + PAGE_SIZE;
-        if (nextCursor != null) {
-            path += "&cursor=" + encode(nextCursor);
-        }
-        return path;
-    }
-
-    public void loadNextPage(FeedCallback callback) {
         if (loading || endReached) {
             return;
         }
+        final String path = pagePath();
+        if (path == null) {
+            callback.onPage(null, false, new ReelsError(400, "A profile Reels source needs a username."));
+            return;
+        }
+        final int requestGeneration = generation;
         loading = true;
-        final int generation = requestGeneration;
-        final int requestOffset = nextOffset;
-        final String path = feedPath();
-        ReelsBackendApi.request(account, "GET", path, null, null, true, (body, status) -> {
-            if (generation != requestGeneration) return;
-            if ((status == 401 || status == 0) && !MODE_FOLLOWING.equals(mode)) {
-                // The public feed must still load when the export proof is unavailable.
-                ReelsBackendApi.request(account, "GET", path, null, null, false, (publicBody, publicStatus) -> {
-                    if (generation != requestGeneration) return;
-                    finishPage(publicBody, publicStatus, generation, requestOffset, callback);
-                });
-            } else {
-                finishPage(body, status, generation, requestOffset, callback);
+        final boolean withProof = source.requiresAuth || !publicFallback;
+        ReelsBackendApi.request(account, "GET", path, null, null, withProof, (body, status) -> {
+            if (requestGeneration != generation) {
+                return;
+            }
+            loading = false;
+            if (status < 200 || status >= 300) {
+                if (status == 401 && !source.requiresAuth && !publicFallback) {
+                    publicFallback = true;
+                    loadNextPage(callback);
+                    return;
+                }
+                callback.onPage(null, false, ReelsError.fromResponse(status, body));
+                return;
+            }
+            try {
+                final JSONObject root = new JSONObject(body == null ? "{}" : body);
+                final ArrayList<ReelsItem> items = parseItems(root);
+                final boolean end = advancePagination(root);
+                callback.onPage(items, end, null);
+            } catch (Exception malformed) {
+                callback.onPage(null, false, new ReelsError(500, "The Reels feed could not be read."));
             }
         });
     }
 
-    private void finishPage(String body, int status, int generation, int requestOffset, FeedCallback callback) {
-        if (generation != requestGeneration) return;
-        loading = false;
-        if (status < 200 || status >= 300 || body == null) {
-            callback.onPage(new ArrayList<>(), endReached, restError(status, "Feed request failed"));
+    public void loadSingle(String id, ItemCallback callback) {
+        if (TextUtils.isEmpty(id)) {
+            callback.onItem(null, new ReelsError(400, "This Reel link is incomplete."));
+            return;
+        }
+        final int requestGeneration = generation;
+        final String path = "/api/reels/" + Uri.encode(id);
+        ReelsBackendApi.request(account, "GET", path, null, null, true, (body, status) -> {
+            if (requestGeneration != generation) {
+                return;
+            }
+            if (status == 401) {
+                ReelsBackendApi.invalidateAuthorization(account);
+                ReelsBackendApi.request(account, "GET", path, null, null, false, (publicBody, publicStatus) -> {
+                    if (requestGeneration != generation) {
+                        return;
+                    }
+                    finishSingle(publicBody, publicStatus, callback);
+                });
+                return;
+            }
+            finishSingle(body, status, callback);
+        });
+    }
+
+    private void finishSingle(String body, int status, ItemCallback callback) {
+        if (status < 200 || status >= 300) {
+            callback.onItem(null, ReelsError.fromResponse(status, body));
             return;
         }
         try {
-            final JSONObject response = new JSONObject(body);
-            final JSONArray values = response.optJSONArray("items");
-            if (values == null) {
-                callback.onPage(new ArrayList<>(), endReached, restError(status, "Feed response has no items"));
+            final JSONObject root = new JSONObject(body == null ? "{}" : body);
+            final JSONObject object = root.optJSONObject("item") != null ? root.optJSONObject("item") : root;
+            final ReelsItem item = ReelsItem.fromJson(account, object);
+            if (item == null) {
+                callback.onItem(null, new ReelsError(404, "This Reel is no longer available."));
+            } else {
+                callback.onItem(item, null);
+            }
+        } catch (Exception malformed) {
+            callback.onItem(null, new ReelsError(500, "This Reel could not be read."));
+        }
+    }
+
+    public void refreshItem(ReelsItem item, ItemCallback callback) {
+        if (item == null) return;
+        loadSingle(item.id, (fresh, error) -> {
+            if (fresh != null) {
+                item.copyCountersFrom(fresh);
+            }
+            callback.onItem(item, error);
+        });
+    }
+
+    public void loadCreator(String username, CreatorCallback callback) {
+        if (TextUtils.isEmpty(username)) {
+            callback.onCreator(null, new ReelsError(400, "Creator unavailable."));
+            return;
+        }
+        final String path = "/api/creators/" + Uri.encode(username);
+        ReelsBackendApi.request(account, "GET", path, null, null, true, (body, status) -> {
+            if (status == 401) {
+                ReelsBackendApi.request(account, "GET", path, null, null, false, (publicBody, publicStatus) ->
+                        finishCreator(publicBody, publicStatus, callback));
+            } else {
+                finishCreator(body, status, callback);
+            }
+        });
+    }
+
+    private void finishCreator(String body, int status, CreatorCallback callback) {
+        if (status < 200 || status >= 300) {
+            callback.onCreator(null, ReelsError.fromResponse(status, body));
+            return;
+        }
+        try {
+            final JSONObject root = new JSONObject(body == null ? "{}" : body);
+            final CreatorInfo info = new CreatorInfo();
+            info.userId = root.optLong("userId", 0);
+            info.username = root.optString("username", null);
+            info.displayName = root.optString("displayName", info.username);
+            info.reels = Math.max(0, root.optInt("reels", 0));
+            info.followers = Math.max(0, root.optInt("followers", 0));
+            info.following = Math.max(0, root.optInt("following", 0));
+            info.isFollowing = root.optBoolean("isFollowing", false);
+            info.isSelf = root.optBoolean("isSelf", false);
+            callback.onCreator(info, null);
+        } catch (Exception malformed) {
+            callback.onCreator(null, new ReelsError(500, "Creator details could not be read."));
+        }
+    }
+
+    public void setFollowing(String creatorUsername, boolean following, FollowCallback callback) {
+        if (TextUtils.isEmpty(creatorUsername)) {
+            callback.onFollow(null, new ReelsError(400, "Creator unavailable."));
+            return;
+        }
+        if (!followInFlight.add(creatorUsername)) {
+            return;
+        }
+        final String path = "/api/creators/" + Uri.encode(creatorUsername) + "/follow";
+        ReelsBackendApi.request(account, following ? "PUT" : "DELETE", path, null, null, true, (body, status) -> {
+            followInFlight.remove(creatorUsername);
+            if (status < 200 || status >= 300) {
+                callback.onFollow(null, ReelsError.fromResponse(status, body));
                 return;
             }
-            final ArrayList<ReelsItem> page = new ArrayList<>();
-            for (int i = 0; i < values.length(); i++) {
-                final JSONObject value = values.optJSONObject(i);
-                if (value == null) continue;
-                final String source = value.optString("source", "");
-                final ReelsItem item;
-                if ("channel".equals(source)) {
-                    item = ReelsItem.fromChannelFeed(account, value);
-                } else {
-                    item = ReelsItem.fromProfile(account, value);
-                }
-                if (item != null) page.add(item);
+            try {
+                final JSONObject root = new JSONObject(body == null ? "{}" : body);
+                final FollowResult result = new FollowResult();
+                result.following = root.optBoolean("following", following);
+                result.followers = root.optInt("followers", 0);
+                result.followingCount = root.optInt("followingCount", 0);
+                callback.onFollow(result, null);
+            } catch (Exception malformed) {
+                callback.onFollow(null, new ReelsError(500, "Follow state could not be read."));
             }
-            if (isProfileFeed()) {
-                if (!response.has("nextOffset") || response.isNull("nextOffset")) {
-                    endReached = true;
-                } else {
-                    final int next = response.optInt("nextOffset", requestOffset + page.size());
-                    endReached = next <= requestOffset;
-                    nextOffset = endReached ? requestOffset : next;
-                }
-            } else {
-                nextCursor = response.isNull("nextCursor") ? null : response.optString("nextCursor", null);
-                endReached = nextCursor == null;
-            }
-            callback.onPage(page, endReached, null);
-        } catch (JSONException e) {
-            callback.onPage(new ArrayList<>(), endReached, restError(status, "Invalid feed response"));
-        }
+        });
     }
 
-    /**
-     * Resolves the channel placeholders immediately around the current page. The callback runs on
-     * the UI thread for every item whose MTProto message finished loading.
-     */
-    public void resolveChannelAround(ArrayList<ReelsItem> items, int center, Utilities.Callback<ReelsItem> callback) {
-        if (items == null || items.isEmpty()) return;
-        final int start = Math.max(0, center - 1);
-        final int end = Math.min(items.size() - 1, center + 1);
-        for (int i = start; i <= end; i++) {
-            final ReelsItem item = items.get(i);
-            if (item.source == ReelsItem.Source.CHANNEL && !item.resolved) {
-                resolveChannelItem(item, callback);
-            }
-        }
-    }
-
-    private void resolveChannelItem(ReelsItem item, Utilities.Callback<ReelsItem> callback) {
-        final String key = item.stableId();
-        if (!resolvingChannels.add(key)) {
-            return;
-        }
-        final LinkCallback resolvedCallback = (resolved, failure) -> {
-            resolvingChannels.remove(key);
-            if (resolved != null) {
-                item.applyResolved(resolved);
-            }
-            if (callback != null) {
-                callback.run(resolved != null ? item : null);
-            }
-        };
-        if (item.messageId <= 0) {
-            resolvingChannels.remove(key);
-            if (callback != null) callback.run(null);
-            return;
-        }
-        if (isValidUsername(item.channelUsername)) {
-            resolveLink(account, item.channelUsername, item.messageId, resolvedCallback);
-        } else if (item.channelId > 0) {
-            loadClip(account, item.channelId, item.messageId, resolvedCallback);
-        } else {
-            resolvingChannels.remove(key);
-            if (callback != null) callback.run(null);
-        }
-    }
-
-    private static TLRPC.TL_error restError(int status, String message) {
-        final TLRPC.TL_error error = new TLRPC.TL_error();
-        error.code = status;
-        error.text = message;
-        return error;
-    }
-
-    /**
-     * Optimistic heart toggle. Requests per clip are serialized: taps while a request is in
-     * flight only update the desired state, which is sent once the previous request returns.
-     */
-    public void setLiked(ReelsItem item, boolean liked, ReactionCallback callback) {
-        if (item.source == ReelsItem.Source.PROFILE) {
-            setProfileLiked(item, liked, callback);
-            return;
-        }
-        if (!item.resolved) {
-            resolveChannelItem(item, resolved -> {
-                if (resolved == null) {
-                    callback.onResult(item, restError(0, "Channel video unavailable"));
-                } else {
-                    setLiked(item, liked, callback);
-                }
-            });
-            return;
-        }
-        if (item.liked != liked) {
-            item.liked = liked;
-            item.likes = Math.max(0, item.likes + (liked ? 1 : -1));
-        }
-
-        final String key = item.stableId();
-        if (inFlightLikes.get(key) != null) {
-            pendingLikes.put(key, liked);
-            return;
-        }
-        sendReaction(item, liked, callback);
-    }
-
-    private void setProfileLiked(ReelsItem item, boolean liked, ReactionCallback callback) {
+    public void setLiked(ReelsItem item, boolean liked, ItemActionCallback callback) {
+        if (item == null) return;
         final boolean previousLiked = item.liked;
-        final int previousCount = item.likes;
+        final long previousLikes = item.likes;
         item.liked = liked;
-        item.likes = Math.max(0, previousCount + (liked == previousLiked ? 0 : liked ? 1 : -1));
+        item.likes = Math.max(0, item.likes + (liked ? 1 : -1));
+        if (!likeInFlight.add(item.id)) {
+            likePending.put(item.id, liked);
+            callback.onResult(item, null);
+            return;
+        }
         final JSONObject body = new JSONObject();
         try {
             body.put("liked", liked);
-        } catch (JSONException e) {
-            item.liked = previousLiked;
-            item.likes = previousCount;
-            callback.onResult(item, restError(0, "Could not create like request"));
-            return;
+        } catch (Exception ignore) {
         }
-        final String path = "/api/reels/" + Uri.encode(item.reelId) + "/like";
-        ReelsBackendApi.request(account, "PUT", path, body, null, true, (response, status) -> {
-            if (status >= 200 && status < 300 && response != null) {
-                try {
-                    final JSONObject result = new JSONObject(response);
-                    item.liked = result.optBoolean("liked", liked);
-                    item.likes = result.optInt("likes", result.optInt("likeCount", result.optInt("count", item.likes)));
-                    callback.onResult(item, null);
-                    return;
-                } catch (JSONException ignored) {
-                }
-            }
-            item.liked = previousLiked;
-            item.likes = previousCount;
-            callback.onResult(item, restError(status, "Could not update Reel like"));
-        });
-    }
-
-    private void sendReaction(ReelsItem item, boolean liked, ReactionCallback callback) {
-        if (item.channelId == 0 || item.messageId <= 0) {
-            callback.onResult(item, restError(0, "Channel video unavailable"));
-            return;
-        }
-        final String key = item.stableId();
-        inFlightLikes.put(key, liked);
-        final TLRPC.TL_messages_sendReaction req = new TLRPC.TL_messages_sendReaction();
-        req.peer = controller().getInputPeer(item.getDialogId());
-        req.msg_id = item.messageId;
-        req.flags |= 1;
-        if (liked) {
-            final TLRPC.TL_reactionEmoji heart = new TLRPC.TL_reactionEmoji();
-            heart.emoticon = ReelsItem.HEART;
-            req.reaction.add(heart);
-        }
-        ConnectionsManager.getInstance(account).sendRequest(req, (response, error) -> {
-            if (response instanceof TLRPC.Updates) {
-                controller().processUpdates((TLRPC.Updates) response, false);
-            }
-            AndroidUtilities.runOnUIThread(() -> {
-                inFlightLikes.remove(key);
-                final Boolean pending = pendingLikes.get(key);
-                pendingLikes.remove(key);
-                if (error != null) {
-                    if (pending != null && pending != liked) {
-                        sendReaction(item, pending, callback);
-                        return;
+        ReelsBackendApi.request(account, "PUT", "/api/reels/" + Uri.encode(item.id) + "/like",
+                body, null, true, (response, status) -> {
+                    ReelsError error = ReelsError.fromResponse(status, response);
+                    if (error == null) {
+                        try {
+                            final JSONObject root = new JSONObject(response == null ? "{}" : response);
+                            item.liked = root.optBoolean("liked", liked);
+                            item.likes = Math.max(0, root.optLong("likes", item.likes));
+                        } catch (Exception ignore) {
+                        }
+                    } else {
+                        item.liked = previousLiked;
+                        item.likes = previousLikes;
                     }
-                    item.liked = !liked;
-                    item.likes = Math.max(0, item.likes + (liked ? -1 : 1));
+                    likeInFlight.remove(item.id);
                     callback.onResult(item, error);
-                    return;
-                }
-                if (pending != null && pending != liked) {
-                    sendReaction(item, pending, callback);
-                    return;
-                }
-                callback.onResult(item, null);
-            });
-        });
+                    final Boolean next = likePending.remove(item.id);
+                    if (next != null && next != item.liked) {
+                        setLiked(item, next, (nextItem, nextError) -> {
+                        });
+                    }
+                });
     }
 
-    public boolean hasPendingReaction(ReelsItem item) {
-        return item.source == ReelsItem.Source.CHANNEL && inFlightLikes.get(item.stableId()) != null;
-    }
-
-    /** Save/bookmark a profile Reel. Channel items have no REST save. */
-    public void setSaved(ReelsItem item, boolean saved, ReactionCallback callback) {
-        if (item.source != ReelsItem.Source.PROFILE) {
-            callback.onResult(item, restError(400, "Saves are profile-only"));
+    public void setSaved(ReelsItem item, boolean saved, ItemActionCallback callback) {
+        if (item == null) return;
+        final boolean previous = item.saved;
+        item.saved = saved;
+        if (!savedInFlight.add(item.id)) {
+            savedPending.put(item.id, saved);
+            callback.onResult(item, null);
             return;
         }
-        final boolean previousSaved = item.saved;
-        final int previousSaves = item.saves;
-        item.saved = saved;
-        item.saves = Math.max(0, previousSaves + (saved == previousSaved ? 0 : saved ? 1 : -1));
+        final String path = "/api/reels/" + Uri.encode(item.id) + "/save";
         final JSONObject body = new JSONObject();
         try {
             body.put("saved", saved);
-        } catch (JSONException ignored) {
-            item.saved = previousSaved;
-            item.saves = previousSaves;
-            callback.onResult(item, restError(0, "Could not create save request"));
-            return;
+        } catch (Exception ignore) {
         }
-        final String path = "/api/reels/" + Uri.encode(item.reelId) + "/save";
-        ReelsBackendApi.request(account, saved ? "PUT" : "DELETE", path, saved ? body : null, null, true, (response, status) -> {
-            if (status >= 200 && status < 300) {
-                if (response != null) {
-                    try {
-                        final JSONObject result = new JSONObject(response);
-                        item.saved = result.optBoolean("saved", saved);
-                        item.saves = result.optInt("saves", item.saves);
-                    } catch (JSONException ignored) {
+        ReelsBackendApi.request(account, saved ? "PUT" : "DELETE", path, saved ? body : null,
+                null, true, (response, status) -> {
+                    ReelsError error = ReelsError.fromResponse(status, response);
+                    if (error == null) {
+                        try {
+                            final JSONObject root = new JSONObject(response == null ? "{}" : response);
+                            item.saved = root.optBoolean("saved", saved);
+                        } catch (Exception ignore) {
+                        }
+                    } else {
+                        item.saved = previous;
                     }
-                }
-                callback.onResult(item, null);
-                return;
-            }
-            item.saved = previousSaved;
-            item.saves = previousSaves;
-            callback.onResult(item, restError(status, "Could not update Reel save"));
-        });
+                    savedInFlight.remove(item.id);
+                    callback.onResult(item, error);
+                    final Boolean next = savedPending.remove(item.id);
+                    if (next != null && next != item.saved) {
+                        setSaved(item, next, (nextItem, nextError) -> {
+                        });
+                    }
+                });
     }
 
-    /** Debounced playback signal: start once and completion once per profile view. */
     public void reportView(ReelsItem item, long positionMs, boolean completed) {
-        if (item == null || item.source != ReelsItem.Source.PROFILE) return;
+        if (item == null) return;
         final JSONObject body = new JSONObject();
         try {
             body.put("positionMs", Math.max(0, positionMs));
             body.put("completed", completed);
-        } catch (JSONException ignored) {
-            return;
+        } catch (Exception ignore) {
         }
-        ReelsBackendApi.request(account, "POST", "/api/reels/" + Uri.encode(item.reelId) + "/view",
-                body, null, true, (response, status) -> {
+        ReelsBackendApi.request(account, "POST", "/api/reels/" + Uri.encode(item.id) + "/view",
+                body, null, false, (response, status) -> {
                     if (status >= 200 && status < 300 && response != null) {
                         try {
-                            item.views = new JSONObject(response).optInt("views",
-                                    new JSONObject(response).optInt("viewCount", item.views));
-                        } catch (JSONException ignored) {
+                            final JSONObject root = new JSONObject(response);
+                            item.views = Math.max(0, root.optLong("views", item.views));
+                        } catch (Exception ignore) {
                         }
                     }
                 });
     }
 
-    public void reportShare(ReelsItem item, ReactionCallback callback) {
-        if (item == null || item.source != ReelsItem.Source.PROFILE) {
-            if (callback != null) callback.onResult(item, null);
-            return;
-        }
-        final int previousShares = item.shares;
-        item.shares++;
-        ReelsBackendApi.request(account, "POST", "/api/reels/" + Uri.encode(item.reelId) + "/share",
-                null, null, true, (response, status) -> {
-                    if (status >= 200 && status < 300) {
-                        if (response != null) {
-                            try {
-                                final JSONObject result = new JSONObject(response);
-                                item.shares = result.optInt("shares", result.optInt("shareCount", item.shares));
-                            } catch (JSONException ignored) {
-                            }
-                        }
-                        if (callback != null) callback.onResult(item, null);
-                    } else {
-                        item.shares = previousShares;
-                        if (callback != null) callback.onResult(item, restError(status, "Could not update share count"));
-                    }
-                });
-    }
-
-    /** Reconciles a profile item's server-computed counters after a comment is posted or deleted. */
-    public void refreshProfileItem(ReelsItem item, ReactionCallback callback) {
-        if (item == null || item.source != ReelsItem.Source.PROFILE) {
-            if (callback != null) callback.onResult(item, null);
-            return;
-        }
-        ReelsBackendApi.request(account, "GET", "/api/reels/" + Uri.encode(item.reelId),
-                null, null, true, (body, status) -> {
-                    if (status >= 200 && status < 300 && body != null) {
+    public void reportShare(ReelsItem item) {
+        if (item == null) return;
+        item.shares = Math.max(0, item.shares + 1);
+        ReelsBackendApi.request(account, "POST", "/api/reels/" + Uri.encode(item.id) + "/share",
+                new JSONObject(), null, true, (response, status) -> {
+                    if (status >= 200 && status < 300 && response != null) {
                         try {
-                            final JSONObject result = new JSONObject(body);
-                            item.comments = result.optInt("comments", item.comments);
-                            item.likes = result.optInt("likes", item.likes);
-                            item.saves = result.optInt("saves", item.saves);
-                            item.shares = result.optInt("shares", item.shares);
-                            item.views = result.optInt("views", item.views);
-                            item.liked = result.optBoolean("liked", item.liked);
-                            item.saved = result.optBoolean("saved", item.saved);
-                        } catch (JSONException ignored) {
+                            final JSONObject root = new JSONObject(response);
+                            item.shares = Math.max(0, root.optLong("shares", item.shares));
+                        } catch (Exception ignore) {
                         }
                     }
-                    if (callback != null) callback.onResult(item, null);
                 });
     }
 
-    public void loadCreator(String username, CreatorCallback callback) {
-        if (!isValidUsername(username)) {
-            callback.onResult(null, restError(404, "Creator not found"));
+    public void loadComments(ReelsItem item, Long before, CommentsCallback callback) {
+        if (item == null) {
+            callback.onComments(null, new ReelsError(400, "This Reel is unavailable."));
             return;
         }
-        ReelsBackendApi.request(account, "GET", "/api/creators/" + encode(username), null, null, true, (body, status) -> {
-            if (status < 200 || status >= 300 || body == null) {
-                callback.onResult(null, restError(status, "Creator request failed"));
+        String path = "/api/reels/" + Uri.encode(item.id) + "/comments?limit=30";
+        if (before != null && before > 0) {
+            path += "&before=" + before;
+        }
+        final String finalPath = path;
+        ReelsBackendApi.request(account, "GET", finalPath, null, null, true, (body, status) -> {
+            if (status == 401) {
+                ReelsBackendApi.request(account, "GET", finalPath, null, null, false, (publicBody, publicStatus) ->
+                        finishComments(publicBody, publicStatus, callback));
+            } else {
+                finishComments(body, status, callback);
+            }
+        });
+    }
+
+    private void finishComments(String body, int status, CommentsCallback callback) {
+        if (status < 200 || status >= 300) {
+            callback.onComments(null, ReelsError.fromResponse(status, body));
+            return;
+        }
+        try {
+            final JSONObject root = new JSONObject(body == null ? "{}" : body);
+            final CommentsPage page = new CommentsPage();
+            final HashSet<Long> seen = new HashSet<>();
+            addComments(root.optJSONArray("pinned"), page.pinned, seen, true);
+            addComments(root.optJSONArray("items"), page.items, seen, false);
+            page.nextBefore = nullableLong(root, "nextBefore");
+            callback.onComments(page, null);
+        } catch (Exception malformed) {
+            callback.onComments(null, new ReelsError(500, "Comments could not be read."));
+        }
+    }
+
+    public void loadReplies(ReelsItem item, long commentId, Long after, RepliesCallback callback) {
+        if (item == null || commentId <= 0) {
+            callback.onReplies(null, new ReelsError(400, "This comment is unavailable."));
+            return;
+        }
+        String path = "/api/reels/" + Uri.encode(item.id) + "/comments/" + commentId
+                + "/replies?limit=30&after=" + (after == null ? 0 : after);
+        final String finalPath = path;
+        ReelsBackendApi.request(account, "GET", finalPath, null, null, true, (body, status) -> {
+            if (status == 401) {
+                ReelsBackendApi.request(account, "GET", finalPath, null, null, false, (publicBody, publicStatus) ->
+                        finishReplies(publicBody, publicStatus, callback));
+            } else {
+                finishReplies(body, status, callback);
+            }
+        });
+    }
+
+    private void finishReplies(String body, int status, RepliesCallback callback) {
+        if (status < 200 || status >= 300) {
+            callback.onReplies(null, ReelsError.fromResponse(status, body));
+            return;
+        }
+        try {
+            final JSONObject root = new JSONObject(body == null ? "{}" : body);
+            final RepliesPage page = new RepliesPage();
+            final HashSet<Long> seen = new HashSet<>();
+            addComments(root.optJSONArray("items"), page.items, seen, false);
+            page.nextAfter = nullableLong(root, "nextAfter");
+            callback.onReplies(page, null);
+        } catch (Exception malformed) {
+            callback.onReplies(null, new ReelsError(500, "Replies could not be read."));
+        }
+    }
+
+    public void postComment(ReelsItem item, String text, long parentId, String gifId, String gifUrl,
+                            CommentCallback callback) {
+        if (item == null) {
+            callback.onComment(null, new ReelsError(400, "This Reel is unavailable."));
+            return;
+        }
+        final JSONObject body = new JSONObject();
+        try {
+            body.put("text", text == null ? "" : text);
+            body.put("parentId", parentId);
+            if (!TextUtils.isEmpty(gifId)) {
+                body.put("gifId", gifId);
+            } else if (!TextUtils.isEmpty(gifUrl)) {
+                body.put("gifUrl", gifUrl);
+            } else {
+                body.put("gifId", JSONObject.NULL);
+            }
+        } catch (Exception ignore) {
+        }
+        ReelsBackendApi.request(account, "POST", "/api/reels/" + Uri.encode(item.id) + "/comments",
+                body, null, true, (response, status) -> {
+                    if (status < 200 || status >= 300) {
+                        callback.onComment(null, ReelsError.fromResponse(status, response));
+                        return;
+                    }
+                    try {
+                        final JSONObject root = new JSONObject(response == null ? "{}" : response);
+                        final JSONObject object = root.optJSONObject("comment") != null
+                                ? root.optJSONObject("comment") : root;
+                        callback.onComment(ReelsComment.fromJson(account, object), null);
+                    } catch (Exception malformed) {
+                        callback.onComment(null, new ReelsError(500, "The comment could not be read."));
+                    }
+                });
+    }
+
+    public void uploadGif(byte[] bytes, GifCallback callback) {
+        ReelsBackendApi.uploadCommentGif(account, bytes, (body, status) -> {
+            if (status < 200 || status >= 300) {
+                callback.onGif(null, ReelsError.fromResponse(status, body));
                 return;
             }
             try {
-                final JSONObject result = new JSONObject(body);
-                final CreatorInfo info = new CreatorInfo();
-                info.userId = result.optLong("userId", result.optLong("id", 0));
-                info.username = result.optString("username", username);
-                info.displayName = result.optString("displayName", result.optString("name", ""));
-                info.reels = result.optInt("reels", 0);
-                info.followers = result.optInt("followers", 0);
-                info.following = result.optInt("following", 0);
-                info.isFollowing = result.optBoolean("isFollowing", false);
-                info.isSelf = result.optBoolean("isSelf", false);
-                callback.onResult(info, null);
-            } catch (JSONException e) {
-                callback.onResult(null, restError(status, "Invalid creator response"));
+                final JSONObject root = new JSONObject(body == null ? "{}" : body);
+                final JSONObject object = root.optJSONObject("gif") != null ? root.optJSONObject("gif") : root;
+                final GifUpload gif = new GifUpload();
+                gif.id = object.optString("id", object.optString("gifId", null));
+                gif.url = ReelsBackendApi.absoluteUrl(account, object.optString("url", null));
+                gif.width = object.optInt("width", 0);
+                gif.height = object.optInt("height", 0);
+                if (TextUtils.isEmpty(gif.id) && TextUtils.isEmpty(gif.url)) {
+                    callback.onGif(null, new ReelsError(500, "The GIF could not be uploaded."));
+                } else {
+                    callback.onGif(gif, null);
+                }
+            } catch (Exception malformed) {
+                callback.onGif(null, new ReelsError(500, "The GIF could not be read."));
             }
         });
     }
 
-    public static void setFollowing(int account, String username, boolean follow, FollowCallback callback) {
-        if (!isValidUsername(username)) {
-            callback.onResult(false, 0, 0, restError(404, "Creator not found"));
+    public void deleteComment(ReelsItem item, long commentId, ActionCallback callback) {
+        if (item == null || commentId <= 0) {
+            callback.onResult(new ReelsError(400, "This comment is unavailable."));
             return;
         }
-        final String method = follow ? "PUT" : "DELETE";
-        ReelsBackendApi.request(account, method, "/api/creators/" + encodePath(username) + "/follow",
-                null, null, true, (body, status) -> {
-                    if (status >= 200 && status < 300 && body != null) {
+        ReelsBackendApi.request(account, "DELETE", "/api/reels/" + Uri.encode(item.id)
+                + "/comments/" + commentId, null, null, true, (body, status) ->
+                callback.onResult(ReelsError.fromResponse(status, body)));
+    }
+
+    public void likeComment(ReelsItem item, ReelsComment comment, boolean liked, CommentActionCallback callback) {
+        if (item == null || comment == null) {
+            callback.onResult(null, new ReelsError(400, "This comment is unavailable."));
+            return;
+        }
+        final boolean previousLiked = comment.liked;
+        final long previousLikes = comment.likes;
+        comment.liked = liked;
+        comment.likes = Math.max(0, comment.likes + (liked ? 1 : -1));
+        final JSONObject body = new JSONObject();
+        try {
+            body.put("liked", liked);
+        } catch (Exception ignore) {
+        }
+        ReelsBackendApi.request(account, "PUT", "/api/reels/" + Uri.encode(item.id)
+                + "/comments/" + comment.id + "/like", body, null, true, (response, status) -> {
+                    final ReelsError error = ReelsError.fromResponse(status, response);
+                    if (error == null) {
                         try {
-                            final JSONObject result = new JSONObject(body);
-                            callback.onResult(result.optBoolean("following", follow),
-                                    result.optInt("followers", 0),
-                                    result.optInt("followingCount", 0), null);
-                            return;
-                        } catch (JSONException ignored) {
+                            final JSONObject root = new JSONObject(response == null ? "{}" : response);
+                            comment.liked = root.optBoolean("liked", liked);
+                            comment.likes = Math.max(0, root.optLong("likes", comment.likes));
+                        } catch (Exception ignore) {
                         }
+                    } else {
+                        comment.liked = previousLiked;
+                        comment.likes = previousLikes;
                     }
-                    callback.onResult(false, 0, 0, restError(status, "Follow request failed"));
+                    callback.onResult(comment, error);
                 });
     }
 
-    /** Public detail lookup used by /r/{id} deep links. */
-    public static void loadReel(int account, String reelId, LinkCallback callback) {
-        if (TextUtils.isEmpty(reelId)) {
-            callback.onResult(null, LinkCallback.NOT_FOUND);
+    public void pinComment(ReelsItem item, ReelsComment comment, boolean pinned, CommentActionCallback callback) {
+        if (item == null || comment == null) {
+            callback.onResult(null, new ReelsError(400, "This comment is unavailable."));
             return;
         }
-        ReelsBackendApi.request(account, "GET", "/api/reels/" + encodePath(reelId), null, null, false, (body, status) -> {
-            if (status >= 200 && status < 300 && body != null) {
-                try {
-                    JSONObject object = new JSONObject(body);
-                    if (object.optJSONObject("reel") != null) object = object.optJSONObject("reel");
-                    ReelsItem item = ReelsItem.fromProfile(account, object);
-                    if (item == null && object != null) {
-                        object = new JSONObject(object.toString());
-                        if (TextUtils.isEmpty(object.optString("mediaUrl", ""))) {
-                            object.put("mediaUrl", "/api/reels/" + encodePath(reelId) + "/media");
+        final boolean previous = comment.pinned;
+        comment.pinned = pinned;
+        final JSONObject body = new JSONObject();
+        try {
+            body.put("pinned", pinned);
+        } catch (Exception ignore) {
+        }
+        ReelsBackendApi.request(account, "PUT", "/api/reels/" + Uri.encode(item.id)
+                + "/comments/" + comment.id + "/pin", body, null, true, (response, status) -> {
+                    final ReelsError error = ReelsError.fromResponse(status, response);
+                    if (error != null) {
+                        comment.pinned = previous;
+                    } else {
+                        try {
+                            final JSONObject root = new JSONObject(response == null ? "{}" : response);
+                            comment.pinned = root.optBoolean("pinned", pinned);
+                        } catch (Exception ignore) {
                         }
-                        item = ReelsItem.fromProfile(account, object);
                     }
-                    callback.onResult(item, item != null ? 0 : LinkCallback.NOT_FOUND);
-                    return;
-                } catch (JSONException ignored) {
-                }
-            }
-            callback.onResult(null, status == 404 ? LinkCallback.NOT_FOUND : LinkCallback.NO_ACCESS);
-        });
-    }
-
-    public void loadDiscussion(ReelsItem item, DiscussionCallback callback) {
-        if (item == null || item.channelId == 0 || item.messageId <= 0) {
-            callback.onResult(null, restError(0, "Channel video unavailable"));
-            return;
-        }
-        final TLRPC.TL_messages_getDiscussionMessage req = new TLRPC.TL_messages_getDiscussionMessage();
-        req.peer = controller().getInputPeer(item.getDialogId());
-        req.msg_id = item.messageId;
-        ConnectionsManager.getInstance(account).sendRequest(req, (response, error) -> AndroidUtilities.runOnUIThread(() -> {
-            if (!(response instanceof TLRPC.TL_messages_discussionMessage)) {
-                callback.onResult(null, error);
-                return;
-            }
-            final TLRPC.TL_messages_discussionMessage res = (TLRPC.TL_messages_discussionMessage) response;
-            controller().putUsers(res.users, false);
-            controller().putChats(res.chats, false);
-            TLRPC.Message root = null;
-            for (int i = 0; i < res.messages.size(); i++) {
-                final TLRPC.Message m = res.messages.get(i);
-                if (root == null || m.id < root.id) {
-                    root = m;
-                }
-            }
-            if (root == null) {
-                callback.onResult(null, error);
-                return;
-            }
-            final Discussion discussion = new Discussion();
-            discussion.dialogId = MessageObject.getPeerId(root.peer_id);
-            discussion.peer = controller().getInputPeer(discussion.dialogId);
-            discussion.rootId = root.id;
-            final TLRPC.Chat chat = controller().getChat(-discussion.dialogId);
-            discussion.canWrite = chat != null && ChatObject.canSendMessages(chat);
-            callback.onResult(discussion, null);
-        }));
-    }
-
-    public int loadReplies(Discussion discussion, int offsetId, RepliesCallback callback) {
-        final TLRPC.TL_messages_getReplies req = new TLRPC.TL_messages_getReplies();
-        req.peer = discussion.peer;
-        req.msg_id = discussion.rootId;
-        req.offset_id = offsetId;
-        req.limit = 50;
-        return ConnectionsManager.getInstance(account).sendRequest(req, (response, error) -> AndroidUtilities.runOnUIThread(() -> {
-            if (!(response instanceof TLRPC.messages_Messages)) {
-                callback.onResult(new ArrayList<>(), true, error);
-                return;
-            }
-            final TLRPC.messages_Messages res = (TLRPC.messages_Messages) response;
-            controller().putUsers(res.users, false);
-            controller().putChats(res.chats, false);
-            final ArrayList<MessageObject> replies = new ArrayList<>();
-            for (int i = 0; i < res.messages.size(); i++) {
-                final TLRPC.Message m = res.messages.get(i);
-                if (m instanceof TLRPC.TL_message && m.id != discussion.rootId) {
-                    replies.add(new MessageObject(account, m, false, false));
-                }
-            }
-            callback.onResult(replies, res.messages.size() < req.limit, null);
-        }));
-    }
-
-    public void sendComment(Discussion discussion, String text, Utilities.Callback<TLRPC.TL_error> callback) {
-        final TLRPC.TL_messages_sendMessage req = new TLRPC.TL_messages_sendMessage();
-        req.peer = discussion.peer;
-        req.message = text;
-        req.random_id = Utilities.random.nextLong();
-        final TLRPC.TL_inputReplyToMessage replyTo = new TLRPC.TL_inputReplyToMessage();
-        replyTo.reply_to_msg_id = discussion.rootId;
-        req.reply_to = replyTo;
-        req.flags |= 1;
-        ConnectionsManager.getInstance(account).sendRequest(req, (response, error) -> {
-            if (response instanceof TLRPC.Updates) {
-                controller().processUpdates((TLRPC.Updates) response, false);
-            }
-            AndroidUtilities.runOnUIThread(() -> callback.run(error));
-        });
-    }
-
-    public void exportLink(ReelsItem item, Utilities.Callback<String> callback) {
-        if (item.source != ReelsItem.Source.CHANNEL || item.channelId == 0 || item.messageId <= 0) {
-            callback.run(null);
-            return;
-        }
-        final TLRPC.TL_channels_exportMessageLink req = new TLRPC.TL_channels_exportMessageLink();
-        req.channel = controller().getInputChannel(item.channelId);
-        req.id = item.messageId;
-        ConnectionsManager.getInstance(account).sendRequest(req, (response, error) -> AndroidUtilities.runOnUIThread(() ->
-                callback.run(response instanceof TLRPC.TL_exportedMessageLink ? ((TLRPC.TL_exportedMessageLink) response).link : null)));
+                    callback.onResult(comment, error);
+                });
     }
 
     public void cancel() {
-        requestGeneration++;
+        generation++;
         loading = false;
     }
 
-    public static boolean isValidUsername(String username) {
-        return username != null && USERNAME.matcher(username).matches();
-    }
-
-    /**
-     * /{username}/v/{messageId}: resolve the public channel, then load exactly that message
-     * and require a playable video from that channel.
-     */
-    public static void resolveLink(int account, String username, int messageId, LinkCallback callback) {
-        final MessagesController controller = MessagesController.getInstance(account);
-        final TLRPC.TL_contacts_resolveUsername req = new TLRPC.TL_contacts_resolveUsername();
-        req.username = username;
-        ConnectionsManager.getInstance(account).sendRequest(req, (response, error) -> AndroidUtilities.runOnUIThread(() -> {
-            if (!(response instanceof TLRPC.TL_contacts_resolvedPeer)) {
-                callback.onResult(null, LinkCallback.NOT_FOUND);
-                return;
-            }
-            final TLRPC.TL_contacts_resolvedPeer res = (TLRPC.TL_contacts_resolvedPeer) response;
-            controller.putUsers(res.users, false);
-            controller.putChats(res.chats, false);
-            if (!(res.peer instanceof TLRPC.TL_peerChannel)) {
-                callback.onResult(null, LinkCallback.NOT_FOUND);
-                return;
-            }
-            final TLRPC.Chat chat = controller.getChat(res.peer.channel_id);
-            if (chat == null || !ChatObject.isChannel(chat)) {
-                callback.onResult(null, LinkCallback.NOT_FOUND);
-                return;
-            }
-            loadClip(account, chat.id, messageId, callback);
-        }));
-    }
-
-    public static void loadClip(int account, long channelId, int messageId, LinkCallback callback) {
-        final MessagesController controller = MessagesController.getInstance(account);
-        final TLRPC.TL_channels_getMessages req = new TLRPC.TL_channels_getMessages();
-        req.channel = controller.getInputChannel(channelId);
-        req.id.add(messageId);
-        ConnectionsManager.getInstance(account).sendRequest(req, (TLObject response, TLRPC.TL_error error) -> AndroidUtilities.runOnUIThread(() -> {
-            if (!(response instanceof TLRPC.messages_Messages)) {
-                callback.onResult(null, isAccessError(error) ? LinkCallback.NO_ACCESS : LinkCallback.NOT_FOUND);
-                return;
-            }
-            final TLRPC.messages_Messages res = (TLRPC.messages_Messages) response;
-            controller.putUsers(res.users, false);
-            controller.putChats(res.chats, false);
-            for (int i = 0; i < res.messages.size(); i++) {
-                final TLRPC.Message m = res.messages.get(i);
-                if (m.id == messageId && m.peer_id != null && m.peer_id.channel_id == channelId) {
-                    final ReelsItem item = ReelsItem.from(account, m);
-                    callback.onResult(item, item != null ? 0 : LinkCallback.NOT_FOUND);
-                    return;
-                }
-            }
-            callback.onResult(null, LinkCallback.NOT_FOUND);
-        }));
-    }
-
-    private static String encodePath(String value) {
-        try {
-            return URLEncoder.encode(value, StandardCharsets.UTF_8.name());
-        } catch (Exception e) {
-            return value;
+    private String pagePath() {
+        switch (source) {
+            case FOR_YOU:
+            case LATEST:
+            case FOLLOWING:
+                return "/api/reels/feed?mode=" + source.mode + "&limit=20"
+                        + (TextUtils.isEmpty(cursor) ? "" : "&cursor=" + Uri.encode(cursor));
+            case PROFILE:
+                if (TextUtils.isEmpty(username)) return null;
+                return "/api/profiles/" + Uri.encode(username) + "/reels?limit=20&offset=" + offset;
+            case SAVED:
+                return "/api/reels/saved?limit=20&offset=" + offset;
+            case SINGLE:
+            default:
+                return null;
         }
     }
 
-    private static boolean isAccessError(TLRPC.TL_error error) {
-        if (error == null || error.text == null) {
-            return false;
+    private ArrayList<ReelsItem> parseItems(JSONObject root) {
+        final ArrayList<ReelsItem> result = new ArrayList<>();
+        final JSONArray items = root.optJSONArray("items");
+        if (items == null) return result;
+        for (int i = 0; i < items.length(); i++) {
+            final ReelsItem item = ReelsItem.fromJson(account, items.optJSONObject(i));
+            if (item != null) {
+                result.add(item);
+            }
         }
-        return error.text.startsWith("CHANNEL_PRIVATE") || error.text.startsWith("CHANNEL_PUBLIC_GROUP_NA")
-                || error.text.startsWith("CHAT_FORBIDDEN") || error.text.startsWith("USER_BANNED_IN_CHANNEL");
+        return result;
+    }
+
+    private boolean advancePagination(JSONObject root) {
+        if (source.isGlobalFeed()) {
+            final String next = root.has("nextCursor") && !root.isNull("nextCursor")
+                    ? root.optString("nextCursor", null) : null;
+            cursor = next;
+            return TextUtils.isEmpty(next);
+        }
+        final int next = root.optInt("nextOffset", -1);
+        if (next < 0 || next <= offset) {
+            return true;
+        }
+        offset = next;
+        return false;
+    }
+
+    private void addComments(JSONArray array, ArrayList<ReelsComment> target, HashSet<Long> seen,
+                             boolean pinned) {
+        if (array == null) return;
+        for (int i = 0; i < array.length(); i++) {
+            final ReelsComment comment = ReelsComment.fromJson(account, array.optJSONObject(i));
+            if (comment == null || !seen.add(comment.id)) continue;
+            if (pinned) comment.pinned = true;
+            target.add(comment);
+        }
+    }
+
+    private static Long nullableLong(JSONObject object, String key) {
+        if (object == null || !object.has(key) || object.isNull(key)) return null;
+        final long value = object.optLong(key, 0);
+        return value > 0 ? value : null;
     }
 }

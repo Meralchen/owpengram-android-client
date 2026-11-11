@@ -1,242 +1,194 @@
 package org.telegram.ui.Components.Reels;
 
-import static org.telegram.messenger.AndroidUtilities.dp;
-
 import android.content.Context;
+import android.graphics.Typeface;
 import android.text.TextUtils;
-import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 
-import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
-import androidx.recyclerview.widget.LinearLayoutManager;
-import androidx.recyclerview.widget.RecyclerView;
-
-import org.json.JSONArray;
-import org.json.JSONException;
-import org.json.JSONObject;
-import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.LocaleController;
-import org.telegram.messenger.NotificationCenter;
 import org.telegram.messenger.R;
-import org.telegram.messenger.Utilities;
 import org.telegram.ui.ActionBar.BottomSheet;
 import org.telegram.ui.ActionBar.Theme;
-import org.telegram.ui.Components.BackupImageView;
-import org.telegram.ui.Components.LayoutHelper;
 
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 
-/** Saved profile Reels. The list is capped by the server cursor and opens the normal viewer. */
-public final class ReelsSavedSheet extends BottomSheet implements NotificationCenter.NotificationCenterDelegate {
+/** Saved Reels, kept as a real paginated source rather than an empty fallback. */
+public final class ReelsSavedSheet extends BottomSheet {
 
-    private final int account;
-    private final Theme.ResourcesProvider provider;
-    private final Utilities.Callback<ReelsItem> openItem;
+    public interface Listener {
+        void onOpen(ReelsItem item);
+    }
+
+    private final ReelsRepository repository;
     private final ArrayList<ReelsItem> items = new ArrayList<>();
-    private final RecyclerView list;
-    private final Adapter adapter = new Adapter();
-    private final TextView state;
-    private final TextView title;
-    private String cursor;
+    private final LinearLayout content;
+    private final Listener listener;
+    private final Theme.ResourcesProvider provider;
     private boolean loading;
     private boolean endReached;
-    private boolean closed;
 
-    public ReelsSavedSheet(Context context, int account, @Nullable Theme.ResourcesProvider provider,
-                           Utilities.Callback<ReelsItem> openItem) {
-        super(context, true, provider);
-        this.account = account;
+    public ReelsSavedSheet(Context context, int account, Theme.ResourcesProvider provider, Listener listener) {
+        super(context, false, provider);
         this.provider = provider;
-        this.openItem = openItem;
-        setApplyBottomPadding(false);
+        this.listener = listener;
+        this.repository = new ReelsRepository(account);
+        repository.setSource(ReelsFeedSource.SAVED, null);
         setApplyTopPadding(false);
-        fixNavigationBar(ReelsTheme.sheetBackground(provider));
+        setApplyBottomPadding(false);
+        setBackgroundColor(ReelsTheme.dialogBackground(provider));
 
         final LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
-
-        final View handle = new View(context);
-        handle.setBackground(ReelsTheme.rounded(ReelsTheme.divider(provider), 2));
-        root.addView(handle, LayoutHelper.createLinear(36, 4, Gravity.CENTER_HORIZONTAL, 0, 8, 0, 2));
+        root.setBackgroundColor(ReelsTheme.dialogBackground(provider));
+        root.setMinimumHeight(dp(420));
 
         final LinearLayout header = new LinearLayout(context);
+        header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        title = new TextView(context);
-        title.setText(LocaleController.getString(R.string.ShortsSaved));
-        title.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 20);
-        title.setTypeface(AndroidUtilities.bold());
-        title.setSingleLine(true);
-        header.addView(title, LayoutHelper.createLinear(0, 52, 1f, 20, 0, 8, 0));
+        header.setPadding(dp(18), dp(10), dp(10), dp(8));
+        root.addView(header, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
 
-        final ImageView close = new ImageView(context);
-        close.setImageResource(R.drawable.msg_close);
-        close.setColorFilter(ReelsTheme.sheetText(provider));
-        close.setContentDescription(LocaleController.getString(R.string.Close));
-        close.setPadding(dp(10), dp(10), dp(10), dp(10));
+        final TextView title = new TextView(context);
+        title.setText(LocaleController.getString(R.string.ReelsSaved));
+        title.setTextColor(ReelsTheme.dialogText(provider));
+        title.setTextSize(16);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        header.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        final TextView close = new TextView(context);
+        close.setText("×");
+        close.setTextSize(25);
+        close.setTextColor(ReelsTheme.dialogSecondary(provider));
+        close.setGravity(Gravity.CENTER);
+        close.setContentDescription("Close saved Reels");
         close.setOnClickListener(v -> dismiss());
-        header.addView(close, LayoutHelper.createLinear(44, 44, Gravity.CENTER_VERTICAL, 0, 0, 8, 0));
-        root.addView(header, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
+        header.addView(close, new LinearLayout.LayoutParams(dp(44), dp(44)));
 
-        list = new RecyclerView(context);
-        final LinearLayoutManager manager = new LinearLayoutManager(context);
-        list.setLayoutManager(manager);
-        list.setAdapter(adapter);
-        list.addOnScrollListener(new RecyclerView.OnScrollListener() {
-            @Override
-            public void onScrolled(@NonNull RecyclerView recyclerView, int dx, int dy) {
-                if (manager.findLastVisibleItemPosition() >= items.size() - 4) loadMore();
-            }
+        final ScrollView scroll = new ScrollView(context);
+        final int scrollId = View.generateViewId();
+        scroll.setId(scrollId);
+        root.addView(scroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        content = new LinearLayout(context);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(10), 0, dp(10), dp(12));
+        scroll.addView(content, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        scroll.setOnScrollChangeListener((v, scrollX, scrollY, oldScrollX, oldScrollY) -> {
+            if (!v.canScrollVertically(1)) loadNext();
         });
-        root.addView(list, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT,
-                (int) (AndroidUtilities.displaySize.y * 0.62f / AndroidUtilities.density)));
-
-        state = new TextView(context);
-        state.setGravity(Gravity.CENTER);
-        state.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 15);
-        root.addView(state, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 24, 0, 24, 0));
 
         setCustomView(root);
-        applyTheme();
-        updateState();
-        NotificationCenter.getGlobalInstance().addObserver(this, NotificationCenter.didSetNewTheme);
-        loadMore();
+        loadNext();
     }
 
-    private void applyTheme() {
-        setBackgroundColor(ReelsTheme.sheetBackground(provider));
-        fixNavigationBar(ReelsTheme.sheetBackground(provider));
-        title.setTextColor(ReelsTheme.sheetText(provider));
-        state.setTextColor(ReelsTheme.textSecondary(provider));
-    }
-
-    private void loadMore() {
+    private void loadNext() {
         if (loading || endReached) return;
         loading = true;
-        updateState();
-        String path = "/api/reels/saved?limit=20";
-        if (!TextUtils.isEmpty(cursor)) {
-            try {
-                path += "&cursor=" + URLEncoder.encode(cursor, StandardCharsets.UTF_8.name());
-            } catch (Exception ignored) {
-            }
-        }
-        ReelsBackendApi.request(account, "GET", path, null, null, true, (body, status) -> {
-            if (closed) return;
+        if (items.isEmpty()) content.removeAllViews();
+        final TextView loadingView = message("Loading saved Reels…");
+        if (items.isEmpty()) content.addView(loadingView);
+        repository.loadNextPage((pageItems, end, error) -> {
             loading = false;
-            if (status >= 200 && status < 300 && body != null) {
-                try {
-                    final JSONObject object = new JSONObject(body);
-                    final JSONArray values = object.optJSONArray("items");
-                    if (values != null) {
-                        for (int i = 0; i < values.length(); i++) {
-                            final ReelsItem item = ReelsItem.fromProfile(account, values.optJSONObject(i));
-                            if (item != null) items.add(item);
-                        }
-                    }
-                    cursor = object.isNull("nextCursor") ? null : object.optString("nextCursor", null);
-                    endReached = cursor == null;
-                    adapter.notifyDataSetChanged();
-                } catch (JSONException ignored) {
+            if (items.isEmpty()) content.removeAllViews();
+            if (error != null) {
+                if (items.isEmpty()) {
+                    content.addView(message(error.describe()));
+                    final TextView retry = button("Retry");
+                    retry.setOnClickListener(v -> loadNext());
+                    content.addView(retry);
+                } else {
+                    content.addView(button("Retry loading more"));
                 }
-            } else {
-                endReached = true;
+                return;
             }
-            updateState();
+            if (pageItems != null) {
+                for (ReelsItem item : pageItems) {
+                    items.add(item);
+                    content.addView(row(item));
+                }
+            }
+            endReached = end;
+            if (items.isEmpty() && endReached) {
+                content.addView(message("No saved Reels yet."));
+            } else if (!endReached) {
+                final TextView more = button("Load more");
+                more.setOnClickListener(v -> loadNext());
+                content.addView(more);
+            }
         });
     }
 
-    private void updateState() {
-        if (loading && items.isEmpty()) {
-            state.setVisibility(View.VISIBLE);
-            state.setText(LocaleController.getString(R.string.Loading));
-        } else if (!loading && items.isEmpty()) {
-            state.setVisibility(View.VISIBLE);
-            state.setText(LocaleController.getString(R.string.ShortsSavedEmpty));
-        } else {
-            state.setVisibility(View.GONE);
-        }
+    private View row(ReelsItem item) {
+        final LinearLayout row = new LinearLayout(getContext());
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(4), dp(6), dp(4), dp(6));
+
+        final ReelsCoverView cover = new ReelsCoverView(getContext());
+        cover.setCover(item.thumbnailUrl, item.initial());
+        row.addView(cover, new LinearLayout.LayoutParams(dp(58), dp(78)));
+
+        final LinearLayout text = new LinearLayout(getContext());
+        text.setOrientation(LinearLayout.VERTICAL);
+        text.setPadding(dp(12), 0, 0, 0);
+        row.addView(text, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        final TextView owner = new TextView(getContext());
+        owner.setText(item.ownerDisplayName + " @" + item.ownerUsername);
+        owner.setTextColor(ReelsTheme.dialogText(provider));
+        owner.setTextSize(13);
+        owner.setTypeface(Typeface.DEFAULT_BOLD);
+        text.addView(owner);
+
+        final TextView caption = new TextView(getContext());
+        caption.setText(TextUtils.isEmpty(item.caption) ? "Reel" : item.caption);
+        caption.setTextColor(ReelsTheme.dialogSecondary(provider));
+        caption.setTextSize(12);
+        caption.setMaxLines(2);
+        caption.setEllipsize(TextUtils.TruncateAt.END);
+        text.addView(caption);
+
+        row.setOnClickListener(v -> {
+            dismiss();
+            if (listener != null) listener.onOpen(item);
+        });
+        return row;
     }
 
-    @Override
-    public void didReceivedNotification(int id, int account, Object... args) {
-        if (id == NotificationCenter.didSetNewTheme) {
-            applyTheme();
-            adapter.notifyDataSetChanged();
-        }
+    private TextView message(String text) {
+        final TextView view = new TextView(getContext());
+        view.setText(text);
+        view.setTextColor(ReelsTheme.dialogSecondary(provider));
+        view.setTextSize(13);
+        view.setGravity(Gravity.CENTER);
+        view.setPadding(0, dp(24), 0, dp(12));
+        return view;
     }
 
-    @Override
-    public void dismiss() {
-        if (closed) return;
-        closed = true;
-        NotificationCenter.getGlobalInstance().removeObserver(this, NotificationCenter.didSetNewTheme);
-        super.dismiss();
+    private TextView button(String text) {
+        final TextView view = new TextView(getContext());
+        view.setText(text);
+        view.setTextColor(ReelsTheme.accentIcon(provider));
+        view.setTextSize(12);
+        view.setTypeface(Typeface.DEFAULT_BOLD);
+        view.setGravity(Gravity.CENTER);
+        view.setPadding(dp(14), 0, dp(14), 0);
+        view.setBackground(ReelsTheme.rounded(ReelsTheme.accent(provider), dp(16)));
+        final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, dp(32));
+        params.gravity = Gravity.CENTER_HORIZONTAL;
+        params.topMargin = dp(8);
+        view.setLayoutParams(params);
+        return view;
     }
 
-    private final class Adapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
-        @NonNull
-        @Override
-        public RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
-            final LinearLayout row = new LinearLayout(parent.getContext());
-            row.setOrientation(LinearLayout.HORIZONTAL);
-            row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setPadding(dp(16), dp(8), dp(16), dp(8));
-
-            final BackupImageView thumb = new BackupImageView(parent.getContext());
-            thumb.setRoundRadius(dp(8));
-            row.addView(thumb, LayoutHelper.createLinear(56, 76));
-
-            final LinearLayout text = new LinearLayout(parent.getContext());
-            text.setOrientation(LinearLayout.VERTICAL);
-            final TextView creator = new TextView(parent.getContext());
-            creator.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 14);
-            creator.setTypeface(AndroidUtilities.bold());
-            creator.setSingleLine(true);
-            text.addView(creator);
-            final TextView caption = new TextView(parent.getContext());
-            caption.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 13);
-            caption.setMaxLines(2);
-            caption.setEllipsize(TextUtils.TruncateAt.END);
-            text.addView(caption, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 2, 0, 0));
-            row.addView(text, LayoutHelper.createLinear(0, LayoutHelper.WRAP_CONTENT, 1f, 12, 0, 0, 0));
-            return new RecyclerView.ViewHolder(row) {};
-        }
-
-        @Override
-        public void onBindViewHolder(@NonNull RecyclerView.ViewHolder holder, int position) {
-            final LinearLayout row = (LinearLayout) holder.itemView;
-            final BackupImageView thumb = (BackupImageView) row.getChildAt(0);
-            final LinearLayout text = (LinearLayout) row.getChildAt(1);
-            final TextView creator = (TextView) text.getChildAt(0);
-            final TextView caption = (TextView) text.getChildAt(1);
-            final ReelsItem item = items.get(position);
-
-            creator.setTextColor(ReelsTheme.sheetText(provider));
-            caption.setTextColor(ReelsTheme.textSecondary(provider));
-            creator.setText(!TextUtils.isEmpty(item.creatorName) ? item.creatorName
-                    : !TextUtils.isEmpty(item.creatorUsername) ? "@" + item.creatorUsername : "");
-            caption.setText(item.getCaption() != null ? item.getCaption() : "");
-            thumb.clearImage();
-            if (!TextUtils.isEmpty(item.thumbnailUrl)) {
-                thumb.setImage(item.thumbnailUrl, "64_88", (android.graphics.drawable.Drawable) null);
-            }
-            row.setOnClickListener(v -> {
-                dismiss();
-                if (openItem != null) openItem.run(item);
-            });
-        }
-
-        @Override
-        public int getItemCount() {
-            return items.size();
-        }
+    private int dp(float value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
     }
 }

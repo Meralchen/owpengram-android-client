@@ -1,329 +1,600 @@
 package org.telegram.ui.Components.Reels;
 
-import static org.telegram.messenger.AndroidUtilities.dp;
-
 import android.content.Context;
+import android.graphics.Color;
+import android.graphics.Typeface;
 import android.text.TextUtils;
-import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.inputmethod.EditorInfo;
-import android.widget.ImageView;
+import android.view.inputmethod.InputMethodManager;
+import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.PopupMenu;
+import android.widget.ScrollView;
 import android.widget.TextView;
-
-import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
-import androidx.recyclerview.widget.LinearLayoutManager;
-import androidx.recyclerview.widget.RecyclerView;
 
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.LocaleController;
-import org.telegram.messenger.MessageObject;
-import org.telegram.messenger.MessagesController;
-import org.telegram.messenger.NotificationCenter;
 import org.telegram.messenger.R;
-import org.telegram.messenger.UserObject;
+import org.telegram.messenger.UserConfig;
 import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.ActionBar.BottomSheet;
 import org.telegram.ui.ActionBar.Theme;
-import org.telegram.ui.Components.AvatarDrawable;
-import org.telegram.ui.Components.BackupImageView;
-import org.telegram.ui.Components.EditTextBoldCursor;
-import org.telegram.ui.Components.LayoutHelper;
-import org.telegram.ui.Components.RadialProgressView;
 
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Locale;
 
-/** Native comments sheet: messages.getDiscussionMessage, then messages.getReplies on the thread. */
-public class ReelsCommentsSheet extends BottomSheet implements NotificationCenter.NotificationCenterDelegate {
+/** The only Reels comments surface. It posts through POST /comments with parentId. */
+public final class ReelsCommentsSheet extends BottomSheet {
 
-    private final ReelsRepository repository;
-    private final ReelsItem item;
-    private final Theme.ResourcesProvider provider;
-    private final ArrayList<MessageObject> replies = new ArrayList<>();
-    private ReelsRepository.Discussion discussion;
-    private boolean loading;
-    private boolean endReached;
-    private boolean closed;
-    private int requestId;
-
-    private final TextView titleView;
-    private final View handle;
-    private final RecyclerView listView;
-    private final TextView emptyView;
-    private final RadialProgressView progressView;
-    private final LinearLayout inputRow;
-    private final EditTextBoldCursor inputField;
-    private final ImageView sendButton;
-    private final RecyclerView.Adapter<RecyclerView.ViewHolder> adapter;
-
-    public ReelsCommentsSheet(Context context, ReelsRepository repository, ReelsItem item) {
-        this(context, repository, item, null);
+    public interface Listener {
+        void onCommentsChanged(ReelsItem item);
     }
 
-    public ReelsCommentsSheet(Context context, ReelsRepository repository, ReelsItem item,
-                              @Nullable Theme.ResourcesProvider provider) {
-        super(context, true, provider);
-        this.repository = repository;
+    public interface GifPickerHost {
+        void pickGif(ReelsCommentsSheet sheet);
+    }
+
+    private final int account;
+    private final ReelsItem item;
+    private final ReelsRepository repository;
+    private final Listener listener;
+    private final Theme.ResourcesProvider provider;
+    private final LinearLayout content;
+    private final ScrollView scrollView;
+    private final EditText input;
+    private final TextView sendView;
+    private final TextView gifView;
+    private final TextView statusView;
+    private final TextView titleView;
+    private final HashMap<Long, LinearLayout> replyContainers = new HashMap<>();
+    private final HashSet<Long> loadedReplyThreads = new HashSet<>();
+    private final HashMap<Long, Long> replyNextAfter = new HashMap<>();
+    private Long nextBefore;
+    private ReelsComment replyTarget;
+    private GifPickerHost gifPickerHost;
+    private boolean loading;
+    private boolean sending;
+    private String pendingGifId;
+    private String pendingGifUrl;
+    private int pendingGifWidth;
+    private int pendingGifHeight;
+
+    public ReelsCommentsSheet(Context context, int account, ReelsItem item,
+                              Theme.ResourcesProvider provider, Listener listener) {
+        super(context, false, provider);
+        this.account = account;
         this.item = item;
         this.provider = provider;
-        currentAccount = item.account;
-        setApplyBottomPadding(false);
+        this.listener = listener;
+        this.repository = new ReelsRepository(account);
         setApplyTopPadding(false);
-        fixNavigationBar(ReelsTheme.sheetBackground(provider));
+        setApplyBottomPadding(false);
+        setBackgroundColor(ReelsTheme.dialogBackground(provider));
 
         final LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
-
-        handle = new View(context);
-        handle.setBackground(ReelsTheme.rounded(ReelsTheme.divider(provider), 2));
-        root.addView(handle, LayoutHelper.createLinear(36, 4, Gravity.CENTER_HORIZONTAL, 0, 8, 0, 2));
+        root.setBackgroundColor(ReelsTheme.dialogBackground(provider));
 
         final LinearLayout header = new LinearLayout(context);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setPadding(dp(18), dp(10), dp(10), dp(8));
+        root.addView(header, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
 
         titleView = new TextView(context);
-        titleView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 20);
-        titleView.setTypeface(AndroidUtilities.bold());
-        titleView.setSingleLine(true);
-        titleView.setGravity(Gravity.CENTER_VERTICAL);
-        updateTitle();
-        header.addView(titleView, LayoutHelper.createLinear(0, 52, 1f, 20, 0, 8, 0));
+        titleView.setTextColor(ReelsTheme.dialogText(provider));
+        titleView.setTextSize(16);
+        titleView.setTypeface(Typeface.DEFAULT_BOLD);
+        header.addView(titleView, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        final ImageView close = new ImageView(context);
-        close.setImageResource(R.drawable.msg_close);
-        close.setColorFilter(ReelsTheme.sheetText(provider));
-        close.setContentDescription(LocaleController.getString(R.string.Close));
-        close.setPadding(dp(10), dp(10), dp(10), dp(10));
+        final TextView close = new TextView(context);
+        close.setText("×");
+        close.setTextSize(25);
+        close.setTextColor(ReelsTheme.dialogSecondary(provider));
+        close.setGravity(Gravity.CENTER);
+        close.setContentDescription("Close comments");
         close.setOnClickListener(v -> dismiss());
-        header.addView(close, LayoutHelper.createLinear(44, 44, Gravity.CENTER_VERTICAL, 0, 0, 8, 0));
-        root.addView(header, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
+        header.addView(close, new LinearLayout.LayoutParams(dp(44), dp(44)));
 
-        final android.widget.FrameLayout listContainer = new android.widget.FrameLayout(context);
-        root.addView(listContainer, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT,
-                (int) (AndroidUtilities.displaySize.y * 0.62f / AndroidUtilities.density)));
+        scrollView = new ScrollView(context);
+        scrollView.setFillViewport(true);
+        scrollView.setBackgroundColor(ReelsTheme.dialogBackground(provider));
+        root.addView(scrollView, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        listView = new RecyclerView(context);
-        final LinearLayoutManager layoutManager = new LinearLayoutManager(context);
-        listView.setLayoutManager(layoutManager);
-        listView.setAdapter(adapter = new Adapter());
-        listView.addOnScrollListener(new RecyclerView.OnScrollListener() {
-            @Override
-            public void onScrolled(@NonNull RecyclerView recyclerView, int dx, int dy) {
-                if (layoutManager.findLastVisibleItemPosition() >= replies.size() - 5) {
-                    loadMore();
-                }
-            }
-        });
-        listContainer.addView(listView, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
+        content = new LinearLayout(context);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(12), dp(2), dp(12), dp(12));
+        scrollView.addView(content, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        emptyView = new TextView(context);
-        emptyView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 15);
-        emptyView.setGravity(Gravity.CENTER);
-        emptyView.setText(LocaleController.getString(R.string.NoComments));
-        emptyView.setVisibility(View.GONE);
-        listContainer.addView(emptyView, LayoutHelper.createFrame(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT, Gravity.CENTER));
+        final LinearLayout footer = new LinearLayout(context);
+        footer.setOrientation(LinearLayout.VERTICAL);
+        footer.setPadding(dp(12), dp(6), dp(12), dp(10));
+        footer.setBackgroundColor(ReelsTheme.dialogBackground(provider));
+        root.addView(footer, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        progressView = new RadialProgressView(context);
-        progressView.setSize(dp(36));
-        progressView.setVisibility(View.GONE);
-        listContainer.addView(progressView, LayoutHelper.createFrame(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT, Gravity.CENTER));
+        statusView = new TextView(context);
+        statusView.setTextColor(ReelsTheme.dialogSecondary(provider));
+        statusView.setTextSize(11);
+        statusView.setVisibility(View.GONE);
+        footer.addView(statusView);
 
-        final View divider = new View(context);
-        divider.setBackgroundColor(ReelsTheme.divider(provider));
-        root.addView(divider, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 1));
-
-        inputRow = new LinearLayout(context);
+        final LinearLayout inputRow = new LinearLayout(context);
         inputRow.setOrientation(LinearLayout.HORIZONTAL);
         inputRow.setGravity(Gravity.CENTER_VERTICAL);
-        inputRow.setPadding(dp(12), dp(6), dp(12), dp(8));
+        footer.addView(inputRow, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
 
-        inputField = new EditTextBoldCursor(context);
-        inputField.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 16);
-        inputField.setHint(LocaleController.getString(R.string.LeaveAComment));
-        inputField.setBackground(null);
-        inputField.setMaxLines(4);
-        inputField.setImeOptions(EditorInfo.IME_ACTION_SEND | EditorInfo.IME_FLAG_NO_EXTRACT_UI);
-        inputField.setOnEditorActionListener((v, actionId, event) -> {
-            if (actionId == EditorInfo.IME_ACTION_SEND) {
-                sendComment();
+        input = new EditText(context);
+        input.setHint(LocaleController.getString(R.string.ReelsCommentHint));
+        input.setHintTextColor(ReelsTheme.dialogSecondary(provider));
+        input.setTextColor(ReelsTheme.dialogText(provider));
+        input.setTextSize(14);
+        input.setMaxLines(3);
+        input.setBackground(ReelsTheme.rounded(0x14000000, dp(18)));
+        input.setPadding(dp(14), 0, dp(14), 0);
+        inputRow.addView(input, new LinearLayout.LayoutParams(0, dp(42), 1f));
+
+        gifView = pill(context, "GIF", ReelsTheme.dialogSecondary(provider));
+        gifView.setContentDescription("Attach a GIF");
+        gifView.setOnClickListener(v -> {
+            if (gifPickerHost != null) {
+                gifPickerHost.pickGif(this);
+            } else {
+                showStatus("Choose a GIF from the device.");
+            }
+        });
+        final LinearLayout.LayoutParams gifParams = new LinearLayout.LayoutParams(dp(48), dp(38));
+        gifParams.setMarginStart(dp(7));
+        inputRow.addView(gifView, gifParams);
+
+        sendView = pill(context, "Send", ReelsTheme.accent(provider));
+        sendView.setTextColor(ReelsTheme.accentIcon(provider));
+        sendView.setTypeface(Typeface.DEFAULT_BOLD);
+        sendView.setContentDescription("Send comment");
+        sendView.setOnClickListener(v -> post());
+        final LinearLayout.LayoutParams sendParams = new LinearLayout.LayoutParams(dp(58), dp(38));
+        sendParams.setMarginStart(dp(7));
+        inputRow.addView(sendView, sendParams);
+
+        setCustomView(root);
+        addTextChangedListener();
+        loadPage(null, true);
+    }
+
+    public void setGifPickerHost(GifPickerHost host) {
+        gifPickerHost = host;
+    }
+
+    /** Called by the host fragment after the local image picker returns raw GIF bytes. */
+    public void onGifPicked(byte[] bytes) {
+        if (bytes == null || bytes.length == 0) {
+            showStatus("No GIF was selected.");
+            return;
+        }
+        showStatus("Uploading GIF…");
+        repository.uploadGif(bytes, (gif, error) -> {
+            if (error != null || gif == null) {
+                showStatus(error == null ? "The GIF could not be uploaded." : error.describe());
+                return;
+            }
+            pendingGifId = gif.id;
+            pendingGifUrl = gif.url;
+            pendingGifWidth = gif.width;
+            pendingGifHeight = gif.height;
+            showStatus("GIF attached.");
+        });
+    }
+
+    private void addTextChangedListener() {
+        input.addTextChangedListener(new android.text.TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+            }
+
+            @Override
+            public void afterTextChanged(android.text.Editable s) {
+                updateComposerState();
+            }
+        });
+    }
+
+    private void updateComposerState() {
+        final boolean hasGif = !TextUtils.isEmpty(pendingGifId) || !TextUtils.isEmpty(pendingGifUrl);
+        sendView.setEnabled(!sending && (hasGif || input.getText().length() > 0));
+        sendView.setAlpha(sendView.isEnabled() ? 1f : 0.45f);
+    }
+
+    private void loadPage(Long before, boolean clear) {
+        if (loading) return;
+        if (clear) {
+            content.removeAllViews();
+            nextBefore = null;
+            loadedReplyThreads.clear();
+            replyNextAfter.clear();
+            replyContainers.clear();
+        }
+        loading = true;
+        if (clear) content.addView(loadingView("Loading comments…"));
+        repository.loadComments(item, before, (page, error) -> {
+            loading = false;
+            if (clear) content.removeAllViews();
+            if (error != null) {
+                if (clear) addError(error.describe(), () -> loadPage(null, true));
+                else addLoadMoreError(error.describe());
+                return;
+            }
+            nextBefore = page.nextBefore;
+            if (page.pinned.isEmpty() && page.items.isEmpty()) {
+                if (clear) content.addView(emptyView("No comments yet."));
+                return;
+            }
+            if (!page.pinned.isEmpty()) {
+                content.addView(sectionLabel("Pinned"));
+                for (ReelsComment comment : page.pinned) {
+                    addComment(comment, false);
+                }
+            }
+            for (ReelsComment comment : page.items) {
+                addComment(comment, false);
+            }
+            if (nextBefore != null) {
+                final TextView more = pill(getContext(), "View more comments",
+                        ReelsTheme.dialogSecondary(provider));
+                more.setOnClickListener(v -> {
+                    more.setEnabled(false);
+                    loadPage(nextBefore, false);
+                });
+                content.addView(more, new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT, dp(36)));
+            }
+            updateTitle();
+            updateComposerState();
+        });
+    }
+
+    private void addComment(ReelsComment comment, boolean reply) {
+        final LinearLayout row = new LinearLayout(getContext());
+        row.setOrientation(LinearLayout.VERTICAL);
+        row.setPadding(reply ? dp(30) : 0, dp(8), 0, dp(8));
+
+        final LinearLayout identity = new LinearLayout(getContext());
+        identity.setOrientation(LinearLayout.HORIZONTAL);
+        identity.setGravity(Gravity.CENTER_VERTICAL);
+        row.addView(identity);
+
+        final TextView author = new TextView(getContext());
+        author.setText(comment.displayNameOrUsername());
+        author.setTextColor(ReelsTheme.dialogText(provider));
+        author.setTextSize(13);
+        author.setTypeface(Typeface.DEFAULT_BOLD);
+        identity.addView(author);
+
+        final TextView time = new TextView(getContext());
+        time.setText(comment.createdAtMs > 0
+                ? android.text.format.DateUtils.getRelativeTimeSpanString(comment.createdAtMs)
+                : "");
+        time.setTextColor(ReelsTheme.dialogSecondary(provider));
+        time.setTextSize(10);
+        final LinearLayout.LayoutParams timeParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        timeParams.setMarginStart(dp(7));
+        identity.addView(time, timeParams);
+
+        if (comment.pinned) {
+            final TextView pinned = new TextView(getContext());
+            pinned.setText("Pinned");
+            pinned.setTextColor(ReelsTheme.accent(provider));
+            pinned.setTextSize(10);
+            final LinearLayout.LayoutParams pinnedParams = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            pinnedParams.setMarginStart(dp(7));
+            identity.addView(pinned, pinnedParams);
+        }
+
+        if (!TextUtils.isEmpty(comment.text)) {
+            final TextView text = new TextView(getContext());
+            text.setText(comment.text);
+            text.setTextColor(ReelsTheme.dialogText(provider));
+            text.setTextSize(14);
+            text.setPadding(0, dp(3), 0, dp(4));
+            row.addView(text);
+        }
+
+        if (!TextUtils.isEmpty(comment.gifUrl)) {
+            final ReelsCoverView gif = new ReelsCoverView(getContext());
+            gif.setCover(comment.gifUrl, "");
+            final LinearLayout.LayoutParams gifParams = new LinearLayout.LayoutParams(
+                    Math.min(dp(220), dp(comment.gifWidth > 0 ? 220 : 180)), dp(130));
+            gifParams.topMargin = dp(2);
+            gifParams.bottomMargin = dp(2);
+            row.addView(gif, gifParams);
+        }
+
+        final LinearLayout actions = new LinearLayout(getContext());
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setGravity(Gravity.CENTER_VERTICAL);
+        row.addView(actions);
+
+        final TextView like = pill(getContext(), "Like " + compact(comment.likes),
+                comment.liked ? ReelsTheme.accent(provider) : ReelsTheme.dialogSecondary(provider));
+        like.setContentDescription(comment.liked ? "Unlike comment" : "Like comment");
+        like.setOnClickListener(v -> repository.likeComment(item, comment, !comment.liked, (updated, error) -> {
+            if (error == null && updated != null) {
+                like.setText("Like " + compact(updated.likes));
+                like.setTextColor(updated.liked ? ReelsTheme.accent(provider) : ReelsTheme.dialogSecondary(provider));
+            } else if (error != null) {
+                showStatus(error.describe());
+            }
+        }));
+        actions.addView(like);
+
+        if (!reply) {
+            final TextView replyButton = pill(getContext(), "Reply", ReelsTheme.dialogSecondary(provider));
+            replyButton.setOnClickListener(v -> beginReply(comment));
+            final LinearLayout.LayoutParams replyParams = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, dp(30));
+            replyParams.setMarginStart(dp(7));
+            actions.addView(replyButton, replyParams);
+        }
+
+        final TextView more = pill(getContext(), "•••", ReelsTheme.dialogSecondary(provider));
+        more.setContentDescription("Comment actions");
+        more.setOnClickListener(v -> showCommentMenu(more, comment));
+        final LinearLayout.LayoutParams moreParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, dp(30));
+        moreParams.setMarginStart(dp(7));
+        actions.addView(more, moreParams);
+
+        content.addView(row, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        if (!reply && comment.replyCount > 0) {
+            final LinearLayout replies = new LinearLayout(getContext());
+            replies.setOrientation(LinearLayout.VERTICAL);
+            replies.setPadding(dp(30), 0, 0, 0);
+            content.addView(replies);
+            replyContainers.put(comment.id, replies);
+            final TextView showReplies = pill(getContext(), "View " + comment.replyCount + " replies",
+                    ReelsTheme.dialogSecondary(provider));
+            showReplies.setPadding(dp(30), dp(3), dp(10), dp(3));
+            showReplies.setOnClickListener(v -> {
+                showReplies.setVisibility(View.GONE);
+                loadReplies(comment, replies, 0L);
+            });
+            content.addView(showReplies, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, dp(32)));
+        }
+    }
+
+    private void loadReplies(ReelsComment parent, LinearLayout container, long after) {
+        repository.loadReplies(item, parent.id, after, (page, error) -> {
+            if (error != null) {
+                showStatus(error.describe());
+                return;
+            }
+            loadedReplyThreads.add(parent.id);
+            for (ReelsComment reply : page.items) {
+                addReply(container, reply);
+            }
+            if (page.nextAfter != null) {
+                final TextView more = pill(getContext(), "More replies", ReelsTheme.dialogSecondary(provider));
+                more.setOnClickListener(v -> {
+                    more.setVisibility(View.GONE);
+                    loadReplies(parent, container, page.nextAfter);
+                });
+                container.addView(more);
+            }
+            replyNextAfter.put(parent.id, page.nextAfter == null ? 0L : page.nextAfter);
+        });
+    }
+
+    private void addReply(LinearLayout container, ReelsComment reply) {
+        final LinearLayout row = new LinearLayout(getContext());
+        row.setOrientation(LinearLayout.VERTICAL);
+        row.setPadding(dp(8), dp(2), 0, dp(2));
+        final TextView author = new TextView(getContext());
+        author.setText(reply.displayNameOrUsername());
+        author.setTextColor(ReelsTheme.dialogText(provider));
+        author.setTextSize(12);
+        author.setTypeface(Typeface.DEFAULT_BOLD);
+        row.addView(author);
+        final TextView text = new TextView(getContext());
+        text.setText(reply.text);
+        text.setTextColor(ReelsTheme.dialogText(provider));
+        text.setTextSize(13);
+        row.addView(text);
+        container.addView(row);
+    }
+
+    private void beginReply(ReelsComment comment) {
+        replyTarget = comment;
+        input.setHint("Reply to @" + (comment.username == null ? comment.displayNameOrUsername() : comment.username));
+        input.requestFocus();
+        final InputMethodManager imm = (InputMethodManager) getContext()
+                .getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (imm != null) imm.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT);
+    }
+
+    private void post() {
+        if (sending) return;
+        final String text = input.getText().toString().trim();
+        if (TextUtils.isEmpty(text) && TextUtils.isEmpty(pendingGifId) && TextUtils.isEmpty(pendingGifUrl)) {
+            return;
+        }
+        sending = true;
+        updateComposerState();
+        final long parentId = replyTarget == null ? 0 : replyTarget.id;
+        repository.postComment(item, text, parentId, pendingGifId, pendingGifUrl, (comment, error) -> {
+            sending = false;
+            if (error != null) {
+                showStatus(error.describe());
+                updateComposerState();
+                return;
+            }
+            input.setText("");
+            replyTarget = null;
+            pendingGifId = null;
+            pendingGifUrl = null;
+            pendingGifWidth = 0;
+            pendingGifHeight = 0;
+            showStatus(null);
+            repository.refreshItem(item, (updated, refreshError) -> {
+                if (updated != null) listener.onCommentsChanged(updated);
+                updateTitle();
+                loadPage(null, true);
+            });
+        });
+    }
+
+    private void showCommentMenu(View anchor, ReelsComment comment) {
+        final long currentUserId = currentUserId();
+        final boolean owner = currentUserId != 0 && currentUserId == item.ownerUserId;
+        final boolean canDelete = currentUserId != 0 && (currentUserId == comment.userId || owner);
+        final boolean canPin = owner && comment.parentId == 0;
+        final PopupMenu popup = new PopupMenu(getContext(), anchor);
+        if (canPin) {
+            popup.getMenu().add(0, 1, 0, comment.pinned ? "Unpin comment" : "Pin comment");
+        }
+        if (canDelete) {
+            popup.getMenu().add(0, 2, 1, "Delete comment");
+        }
+        popup.setOnMenuItemClickListener(menuItem -> {
+            if (menuItem.getItemId() == 1) {
+                repository.pinComment(item, comment, !comment.pinned, (updated, error) -> {
+                    if (error != null) showStatus(error.describe());
+                    else loadPage(null, true);
+                });
+                return true;
+            }
+            if (menuItem.getItemId() == 2) {
+                repository.deleteComment(item, comment.id, error -> {
+                    if (error != null) showStatus(error.describe());
+                    else {
+                        repository.refreshItem(item, (updated, refreshError) -> {
+                            if (updated != null) listener.onCommentsChanged(updated);
+                            updateTitle();
+                            loadPage(null, true);
+                        });
+                    }
+                });
                 return true;
             }
             return false;
         });
-        inputRow.addView(inputField, LayoutHelper.createLinear(0, LayoutHelper.WRAP_CONTENT, 1f));
-
-        sendButton = new ImageView(context);
-        sendButton.setImageResource(R.drawable.ic_send);
-        sendButton.setPadding(dp(8), dp(8), dp(8), dp(8));
-        sendButton.setOnClickListener(v -> sendComment());
-        inputRow.addView(sendButton, LayoutHelper.createLinear(40, 40));
-
-        root.addView(inputRow, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
-
-        setCustomView(root);
-        applyTheme();
-        NotificationCenter.getGlobalInstance().addObserver(this, NotificationCenter.didSetNewTheme);
-        loadDiscussion();
+        popup.show();
     }
 
-    private void applyTheme() {
-        setBackgroundColor(ReelsTheme.sheetBackground(provider));
-        fixNavigationBar(ReelsTheme.sheetBackground(provider));
-        titleView.setTextColor(ReelsTheme.sheetText(provider));
-        emptyView.setTextColor(ReelsTheme.textSecondary(provider));
-        progressView.setProgressColor(ReelsTheme.progress(provider));
-        inputField.setTextColor(ReelsTheme.sheetText(provider));
-        inputField.setHintTextColor(ReelsTheme.sheetHint(provider));
-        sendButton.setColorFilter(ReelsTheme.sheetAccent(provider));
-        if (handle != null) {
-            handle.setBackground(ReelsTheme.rounded(ReelsTheme.divider(provider), 2));
-        }
+    private long currentUserId() {
+        final TLRPC.User user = UserConfig.getInstance(account).getCurrentUser();
+        return user == null ? 0 : user.id;
     }
 
     private void updateTitle() {
-        final String label = LocaleController.getString(R.string.ShortsComments);
-        titleView.setText(item != null && item.comments > 0 ? label + " (" + item.comments + ")" : label);
+        titleView.setText(LocaleController.getString(R.string.ReelsComments) + " (" + item.comments + ")");
     }
 
-    private void loadDiscussion() {
-        loading = true;
-        updateState();
-        repository.loadDiscussion(item, (discussionResult, error) -> {
-            loading = false;
-            if (error != null || discussionResult == null) {
-                endReached = true;
-                updateState();
-                return;
-            }
-            this.discussion = discussionResult;
-            inputRow.setVisibility(discussion.canWrite ? View.VISIBLE : View.GONE);
-            loadMore();
-        });
-    }
-
-    private void loadMore() {
-        if (loading || endReached || discussion == null) {
-            return;
-        }
-        loading = true;
-        updateState();
-        final int offsetId = replies.isEmpty() ? 0 : replies.get(replies.size() - 1).getId();
-        requestId = repository.loadReplies(discussion, offsetId, (newReplies, isEnd, error) -> {
-            loading = false;
-            if (error != null) {
-                endReached = true;
-                updateState();
-                return;
-            }
-            replies.addAll(newReplies);
-            endReached = isEnd;
-            adapter.notifyDataSetChanged();
-            updateTitle();
-            updateState();
-        });
-    }
-
-    private void updateState() {
-        progressView.setVisibility(loading && replies.isEmpty() ? View.VISIBLE : View.GONE);
-        emptyView.setVisibility(!loading && replies.isEmpty() ? View.VISIBLE : View.GONE);
-    }
-
-    private void sendComment() {
-        final String text = inputField.getText() != null ? inputField.getText().toString().trim() : "";
-        if (TextUtils.isEmpty(text) || discussion == null) {
-            return;
-        }
-        inputField.setText("");
-        repository.sendComment(discussion, text, error -> {
-            if (error == null) {
-                item.comments++;
-                updateTitle();
-            }
-        });
-    }
-
-    @Override
-    public void didReceivedNotification(int id, int account, Object... args) {
-        if (id == NotificationCenter.didSetNewTheme) {
-            applyTheme();
-            adapter.notifyDataSetChanged();
+    private void showStatus(String status) {
+        if (TextUtils.isEmpty(status)) {
+            statusView.setVisibility(View.GONE);
+        } else {
+            statusView.setText(status);
+            statusView.setVisibility(View.VISIBLE);
         }
     }
 
-    @Override
-    public void dismiss() {
-        if (closed) return;
-        closed = true;
-        NotificationCenter.getGlobalInstance().removeObserver(this, NotificationCenter.didSetNewTheme);
-        super.dismiss();
+    private void addLoadMoreError(String message) {
+        final TextView retry = pill(getContext(), message + " Retry", ReelsTheme.dialogSecondary(provider));
+        retry.setOnClickListener(v -> loadPage(nextBefore, false));
+        content.addView(retry);
     }
 
-    private final class Adapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
-        @NonNull
-        @Override
-        public RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
-            final LinearLayout cell = new LinearLayout(parent.getContext());
-            cell.setOrientation(LinearLayout.HORIZONTAL);
-            cell.setPadding(dp(16), dp(8), dp(16), dp(8));
+    private void addError(String message, Runnable retry) {
+        final LinearLayout box = new LinearLayout(getContext());
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setGravity(Gravity.CENTER);
+        box.setPadding(0, dp(30), 0, dp(30));
+        final TextView text = new TextView(getContext());
+        text.setText(message);
+        text.setTextColor(ReelsTheme.dialogSecondary(provider));
+        text.setTextSize(13);
+        text.setGravity(Gravity.CENTER);
+        box.addView(text);
+        final TextView button = pill(getContext(), "Retry", ReelsTheme.accent(provider));
+        button.setTextColor(ReelsTheme.accentIcon(provider));
+        button.setOnClickListener(v -> retry.run());
+        final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, dp(34));
+        params.topMargin = dp(10);
+        box.addView(button, params);
+        content.addView(box);
+    }
 
-            final BackupImageView avatar = new BackupImageView(parent.getContext());
-            avatar.setRoundRadius(dp(18));
-            cell.addView(avatar, LayoutHelper.createLinear(36, 36, Gravity.TOP, 0, 2, 12, 0));
+    private View loadingView(String text) {
+        final TextView view = new TextView(getContext());
+        view.setText(text);
+        view.setTextColor(ReelsTheme.dialogSecondary(provider));
+        view.setTextSize(13);
+        view.setGravity(Gravity.CENTER);
+        view.setPadding(0, dp(28), 0, dp(28));
+        return view;
+    }
 
-            final LinearLayout textCol = new LinearLayout(parent.getContext());
-            textCol.setOrientation(LinearLayout.VERTICAL);
+    private View emptyView(String text) {
+        final TextView view = new TextView(getContext());
+        view.setText(text);
+        view.setTextColor(ReelsTheme.dialogSecondary(provider));
+        view.setTextSize(13);
+        view.setGravity(Gravity.CENTER);
+        view.setPadding(0, dp(28), 0, dp(28));
+        return view;
+    }
 
-            final TextView author = new TextView(parent.getContext());
-            author.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 14);
-            author.setTypeface(AndroidUtilities.bold());
-            textCol.addView(author);
+    private TextView sectionLabel(String text) {
+        final TextView view = new TextView(getContext());
+        view.setText(text);
+        view.setTextColor(ReelsTheme.dialogSecondary(provider));
+        view.setTextSize(11);
+        view.setTypeface(Typeface.DEFAULT_BOLD);
+        view.setPadding(0, dp(8), 0, dp(2));
+        return view;
+    }
 
-            final TextView message = new TextView(parent.getContext());
-            message.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 15);
-            textCol.addView(message, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 2, 0, 0));
+    private static TextView pill(Context context, String text, int color) {
+        final TextView view = new TextView(context);
+        view.setText(text);
+        view.setTextColor(color);
+        view.setTextSize(11);
+        view.setGravity(Gravity.CENTER);
+        view.setPadding(dp(context, 10), 0, dp(context, 10), 0);
+        view.setBackground(ReelsTheme.rounded(0x12000000, dp(context, 15)));
+        return view;
+    }
 
-            cell.addView(textCol, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
-            return new RecyclerView.ViewHolder(cell) {};
-        }
+    private int dp(float value) {
+        return dp(getContext(), value);
+    }
 
-        @Override
-        public void onBindViewHolder(@NonNull RecyclerView.ViewHolder holder, int position) {
-            final LinearLayout cell = (LinearLayout) holder.itemView;
-            final BackupImageView avatar = (BackupImageView) cell.getChildAt(0);
-            final LinearLayout textCol = (LinearLayout) cell.getChildAt(1);
-            final TextView author = (TextView) textCol.getChildAt(0);
-            final TextView message = (TextView) textCol.getChildAt(1);
+    private static int dp(Context context, float value) {
+        return Math.round(value * context.getResources().getDisplayMetrics().density);
+    }
 
-            author.setTextColor(ReelsTheme.sheetText(provider));
-            message.setTextColor(ReelsTheme.sheetText(provider));
-
-            final MessageObject msg = replies.get(position);
-            message.setText(msg.messageText);
-
-            final MessagesController controller = MessagesController.getInstance(item.account);
-            final long fromId = msg.getFromChatId();
-            if (fromId > 0) {
-                final TLRPC.User user = controller.getUser(fromId);
-                author.setText(UserObject.getUserName(user));
-                final AvatarDrawable drawable = new AvatarDrawable();
-                drawable.setInfo(user);
-                avatar.setForUserOrChat(user, drawable);
-            } else {
-                final TLRPC.Chat chat = controller.getChat(-fromId);
-                author.setText(chat != null ? chat.title : "");
-                final AvatarDrawable drawable = new AvatarDrawable();
-                drawable.setInfo(chat);
-                avatar.setForUserOrChat(chat, drawable);
-            }
-        }
-
-        @Override
-        public int getItemCount() {
-            return replies.size();
-        }
+    private static String compact(long value) {
+        if (value >= 1_000_000L) return String.format(Locale.US, "%.1fM", value / 1_000_000d);
+        if (value >= 1_000L) return String.format(Locale.US, "%.1fK", value / 1_000d);
+        return String.valueOf(value);
     }
 }

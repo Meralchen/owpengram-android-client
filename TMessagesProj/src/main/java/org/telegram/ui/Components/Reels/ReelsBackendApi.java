@@ -1,5 +1,6 @@
 package org.telegram.ui.Components.Reels;
 
+import android.net.Uri;
 import android.os.AsyncTask;
 import android.text.TextUtils;
 import android.util.Base64;
@@ -19,7 +20,10 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ConcurrentHashMap;
 
-/** REST adapter for profile-owned Reels. The API host follows the account's configured public link domain. */
+/**
+ * HTTP adapter for the profile-only Reels REST contract. The Telegram proof is used only for
+ * personalized reads and mutations; media itself is always a public HTTP URL.
+ */
 public final class ReelsBackendApi {
 
     public interface Callback {
@@ -47,24 +51,36 @@ public final class ReelsBackendApi {
 
     public static String baseUrl(int account) {
         String host = MessagesController.getInstance(account).linkPrefix;
-        if (TextUtils.isEmpty(host)) return null;
+        if (TextUtils.isEmpty(host)) {
+            return null;
+        }
         host = host.trim();
-        while (host.endsWith("/")) host = host.substring(0, host.length() - 1);
-        if (!host.startsWith("https://") && !host.startsWith("http://")) host = "https://" + host;
+        while (host.endsWith("/")) {
+            host = host.substring(0, host.length() - 1);
+        }
+        if (!host.startsWith("https://") && !host.startsWith("http://")) {
+            host = "https://" + host;
+        }
         return host;
     }
 
     public static String absoluteUrl(int account, String pathOrUrl) {
-        if (TextUtils.isEmpty(pathOrUrl)) return null;
-        if (pathOrUrl.startsWith("https://") || pathOrUrl.startsWith("http://")) return pathOrUrl;
-        String base = baseUrl(account);
-        if (base == null) return null;
+        if (TextUtils.isEmpty(pathOrUrl)) {
+            return null;
+        }
+        if (pathOrUrl.startsWith("https://") || pathOrUrl.startsWith("http://")) {
+            return pathOrUrl;
+        }
+        final String base = baseUrl(account);
+        if (base == null) {
+            return null;
+        }
         return base + (pathOrUrl.startsWith("/") ? pathOrUrl : "/" + pathOrUrl);
     }
 
-    /** Returns a short-lived Telegram REST proof; the raw exported bytes are never persisted. */
+    /** Returns a short-lived Telegram REST proof; the exported bytes are never persisted. */
     public static void authorizationHeader(int account, AuthorizationCallback callback) {
-        CachedAuthorization cached = authorizations.get(account);
+        final CachedAuthorization cached = authorizations.get(account);
         if (cached != null && cached.expiresAt > System.currentTimeMillis()) {
             callback.onResult(cached.header);
             return;
@@ -74,12 +90,12 @@ public final class ReelsBackendApi {
         ConnectionsManager.getInstance(account).sendRequest(request, (response, error) -> {
             String header = null;
             if (error == null && response instanceof TLRPC.TL_auth_exportedAuthorization) {
-                TLRPC.TL_auth_exportedAuthorization exported = (TLRPC.TL_auth_exportedAuthorization) response;
+                final TLRPC.TL_auth_exportedAuthorization exported = (TLRPC.TL_auth_exportedAuthorization) response;
                 if (exported.bytes != null && exported.bytes.length > 0) {
-                    String encoded = Base64.encodeToString(exported.bytes, Base64.URL_SAFE | Base64.NO_WRAP | Base64.NO_PADDING);
+                    final String encoded = Base64.encodeToString(exported.bytes,
+                            Base64.URL_SAFE | Base64.NO_WRAP | Base64.NO_PADDING);
                     header = "Telegram " + exported.id + ":" + encoded;
-                    // Keep a safety margin below the server's five-minute expiry.
-                    authorizations.put(account, new CachedAuthorization(header, System.currentTimeMillis() + 4 * 60 * 1000));
+                    authorizations.put(account, new CachedAuthorization(header, System.currentTimeMillis() + 4 * 60 * 1000L));
                 }
             }
             final String result = header;
@@ -98,63 +114,120 @@ public final class ReelsBackendApi {
 
     private static void request(int account, String method, String path, JSONObject json, String bearerTicket,
                                 boolean withTelegramProof, boolean retriedAfter401, Callback callback) {
-        if (withTelegramProof) {
-            authorizationHeader(account, header -> {
-                if (header == null) {
-                    callback.onResult(null, 0);
-                    return;
-                }
-                requestNow(account, method, path, json, bearerTicket, header, (body, status) -> {
-                    if (status == 401 && !retriedAfter401) {
-                        invalidateAuthorization(account);
-                        request(account, method, path, json, bearerTicket, true, true, callback);
-                    } else {
-                        callback.onResult(body, status);
-                    }
-                });
-            });
-        } else {
+        final boolean bearer = !TextUtils.isEmpty(bearerTicket);
+        if (!withTelegramProof || bearer) {
             requestNow(account, method, path, json, bearerTicket, null, callback);
+            return;
         }
+        authorizationHeader(account, header -> {
+            if (header == null) {
+                callback.onResult(null, 0);
+                return;
+            }
+            requestNow(account, method, path, json, null, header, (body, status) -> {
+                if (status == 401 && !retriedAfter401) {
+                    invalidateAuthorization(account);
+                    request(account, method, path, json, null, true, true, callback);
+                } else {
+                    callback.onResult(body, status);
+                }
+            });
+        });
     }
 
-    public static void uploadPart(int account, String uploadId, int partNumber, byte[] bytes, String ticket, Callback callback) {
-        final String url = absoluteUrl(account, "/api/profiles/me/reels/uploads/" + android.net.Uri.encode(uploadId) + "/parts/" + partNumber);
+    public static void uploadPart(int account, String uploadId, int partNumber, byte[] bytes,
+                                  String ticket, Callback callback) {
+        final String path = "/api/profiles/me/reels/uploads/" + Uri.encode(uploadId)
+                + "/parts/" + partNumber;
+        uploadRaw(account, path, "application/octet-stream", bytes, ticket, false, callback);
+    }
+
+    /** Uploads raw image/gif bytes for a comment using the same Telegram proof contract. */
+    public static void uploadCommentGif(int account, byte[] gif, Callback callback) {
+        if (gif == null || gif.length == 0) {
+            callback.onResult(null, 0);
+            return;
+        }
+        uploadRaw(account, "/api/comment-gifs", "image/gif", gif, null, true, callback);
+    }
+
+    private static void uploadRaw(int account, String path, String contentType, byte[] bytes,
+                                  String bearerTicket, boolean withTelegramProof, Callback callback) {
+        uploadRaw(account, path, contentType, bytes, bearerTicket, withTelegramProof, false, callback);
+    }
+
+    private static void uploadRaw(int account, String path, String contentType, byte[] bytes,
+                                  String bearerTicket, boolean withTelegramProof, boolean retriedAfter401,
+                                  Callback callback) {
+        final String url = absoluteUrl(account, path);
         if (url == null || bytes == null) {
             callback.onResult(null, 0);
             return;
         }
+        final boolean bearer = !TextUtils.isEmpty(bearerTicket);
+        if (!withTelegramProof || bearer) {
+            executeRawUpload(url, contentType, bytes, bearerTicket, null, callback);
+            return;
+        }
+        authorizationHeader(account, header -> {
+            if (header == null) {
+                callback.onResult(null, 0);
+                return;
+            }
+            executeRawUpload(url, contentType, bytes, null, header, (body, status) -> {
+                if (status == 401 && !retriedAfter401) {
+                    invalidateAuthorization(account);
+                    uploadRaw(account, path, contentType, bytes, null, true, true, callback);
+                } else {
+                    callback.onResult(body, status);
+                }
+            });
+        });
+    }
+
+    private static void executeRawUpload(String url, String contentType, byte[] bytes, String bearerTicket,
+                                         String telegramHeader, Callback callback) {
         AsyncTask.THREAD_POOL_EXECUTOR.execute(() -> {
             HttpURLConnection connection = null;
             String body = null;
             int status = 0;
             try {
                 connection = (HttpURLConnection) new URL(url).openConnection();
-                connection.setRequestMethod("PUT");
+                connection.setRequestMethod("POST");
                 connection.setConnectTimeout(15000);
-                connection.setReadTimeout(60000);
+                connection.setReadTimeout(90000);
                 connection.setDoOutput(true);
                 connection.setFixedLengthStreamingMode(bytes.length);
                 connection.setRequestProperty("Accept", "application/json");
-                connection.setRequestProperty("Content-Type", "application/octet-stream");
-                connection.setRequestProperty("Authorization", "Bearer " + ticket);
+                connection.setRequestProperty("Content-Type", contentType);
+                if (!TextUtils.isEmpty(bearerTicket)) {
+                    connection.setRequestProperty("Authorization", "Bearer " + bearerTicket);
+                } else if (!TextUtils.isEmpty(telegramHeader)) {
+                    connection.setRequestProperty("Authorization", telegramHeader);
+                }
                 try (OutputStream out = connection.getOutputStream()) {
                     out.write(bytes);
                 }
                 status = connection.getResponseCode();
-                InputStream stream = status >= 200 && status < 300 ? connection.getInputStream() : connection.getErrorStream();
+                final InputStream stream = status >= 200 && status < 300
+                        ? connection.getInputStream() : connection.getErrorStream();
                 if (stream != null) {
-                    StringBuilder result = new StringBuilder();
-                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+                    final StringBuilder result = new StringBuilder();
+                    try (BufferedReader reader = new BufferedReader(
+                            new InputStreamReader(stream, StandardCharsets.UTF_8))) {
                         String line;
-                        while ((line = reader.readLine()) != null) result.append(line);
+                        while ((line = reader.readLine()) != null) {
+                            result.append(line);
+                        }
                     }
                     body = result.toString();
                 }
             } catch (Exception ignore) {
-                // Never log a ticket or authorization material.
+                // Never log tickets, proof material or media URLs.
             } finally {
-                if (connection != null) connection.disconnect();
+                if (connection != null) {
+                    connection.disconnect();
+                }
             }
             final String responseBody = body;
             final int responseCode = status;
@@ -162,75 +235,8 @@ public final class ReelsBackendApi {
         });
     }
 
-    /** Uploads raw image/gif bytes for a comment, with the same 401 refresh as JSON requests. */
-    public static void uploadCommentGif(int account, byte[] gif, Callback callback) {
-        if (gif == null || gif.length == 0) {
-            callback.onResult(null, 0);
-            return;
-        }
-        uploadRaw(account, "/api/comment-gifs", "image/gif", gif, false, callback);
-    }
-
-    private static void uploadRaw(int account, String path, String contentType, byte[] bytes, boolean retriedAfter401,
-                                  Callback callback) {
-        authorizationHeader(account, header -> {
-            if (header == null) {
-                callback.onResult(null, 0);
-                return;
-            }
-            final String url = absoluteUrl(account, path);
-            if (url == null) {
-                callback.onResult(null, 0);
-                return;
-            }
-            AsyncTask.THREAD_POOL_EXECUTOR.execute(() -> {
-                HttpURLConnection connection = null;
-                String body = null;
-                int status = 0;
-                try {
-                    connection = (HttpURLConnection) new URL(url).openConnection();
-                    connection.setRequestMethod("POST");
-                    connection.setConnectTimeout(15000);
-                    connection.setReadTimeout(60000);
-                    connection.setDoOutput(true);
-                    connection.setFixedLengthStreamingMode(bytes.length);
-                    connection.setRequestProperty("Accept", "application/json");
-                    connection.setRequestProperty("Content-Type", contentType);
-                    connection.setRequestProperty("Authorization", header);
-                    try (OutputStream out = connection.getOutputStream()) {
-                        out.write(bytes);
-                    }
-                    status = connection.getResponseCode();
-                    InputStream stream = status >= 200 && status < 300 ? connection.getInputStream() : connection.getErrorStream();
-                    if (stream != null) {
-                        StringBuilder result = new StringBuilder();
-                        try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
-                            String line;
-                            while ((line = reader.readLine()) != null) result.append(line);
-                        }
-                        body = result.toString();
-                    }
-                } catch (Exception ignore) {
-                    // Never log authorization material or GIF bytes.
-                } finally {
-                    if (connection != null) connection.disconnect();
-                }
-                final String responseBody = body;
-                final int responseCode = status;
-                AndroidUtilities.runOnUIThread(() -> {
-                    if (responseCode == 401 && !retriedAfter401) {
-                        invalidateAuthorization(account);
-                        uploadRaw(account, path, contentType, bytes, true, callback);
-                    } else {
-                        callback.onResult(responseBody, responseCode);
-                    }
-                });
-            });
-        });
-    }
-
-    private static void requestNow(int account, String method, String path, JSONObject json, String bearerTicket,
-                                   String telegramAuthorization, Callback callback) {
+    private static void requestNow(int account, String method, String path, JSONObject json,
+                                   String bearerTicket, String telegramHeader, Callback callback) {
         final String url = absoluteUrl(account, path);
         if (url == null) {
             callback.onResult(null, 0);
@@ -246,29 +252,40 @@ public final class ReelsBackendApi {
                 connection.setConnectTimeout(15000);
                 connection.setReadTimeout(30000);
                 connection.setRequestProperty("Accept", "application/json");
-                if (telegramAuthorization != null) connection.setRequestProperty("Authorization", telegramAuthorization);
-                else if (!TextUtils.isEmpty(bearerTicket)) connection.setRequestProperty("Authorization", "Bearer " + bearerTicket);
-                if (json != null) {
+                if (!TextUtils.isEmpty(bearerTicket)) {
+                    connection.setRequestProperty("Authorization", "Bearer " + bearerTicket);
+                } else if (!TextUtils.isEmpty(telegramHeader)) {
+                    connection.setRequestProperty("Authorization", telegramHeader);
+                }
+                if (json != null && !"GET".equals(method)) {
+                    final byte[] payload = json.toString().getBytes(StandardCharsets.UTF_8);
                     connection.setDoOutput(true);
+                    connection.setFixedLengthStreamingMode(payload.length);
                     connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
                     try (OutputStream out = connection.getOutputStream()) {
-                        out.write(json.toString().getBytes(StandardCharsets.UTF_8));
+                        out.write(payload);
                     }
                 }
                 status = connection.getResponseCode();
-                InputStream stream = status >= 200 && status < 300 ? connection.getInputStream() : connection.getErrorStream();
+                final InputStream stream = status >= 200 && status < 300
+                        ? connection.getInputStream() : connection.getErrorStream();
                 if (stream != null) {
-                    StringBuilder result = new StringBuilder();
-                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+                    final StringBuilder result = new StringBuilder();
+                    try (BufferedReader reader = new BufferedReader(
+                            new InputStreamReader(stream, StandardCharsets.UTF_8))) {
                         String line;
-                        while ((line = reader.readLine()) != null) result.append(line);
+                        while ((line = reader.readLine()) != null) {
+                            result.append(line);
+                        }
                     }
                     body = result.toString();
                 }
             } catch (Exception ignore) {
-                // Return an empty failure to the feature layer; never log auth headers or tickets.
+                // Network failures become a retryable ReelsError at the repository layer.
             } finally {
-                if (connection != null) connection.disconnect();
+                if (connection != null) {
+                    connection.disconnect();
+                }
             }
             final String responseBody = body;
             final int responseCode = status;

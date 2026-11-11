@@ -128,8 +128,9 @@ import org.telegram.messenger.MessagesStorage;
 import org.telegram.messenger.NotificationCenter;
 import org.telegram.owpengram.OwpengramServer;
 import org.telegram.owpengram.OwpengramServers;
-import org.telegram.ui.Components.Reels.ReelsViewer;
-import org.telegram.ui.Components.Reels.ReelsRepository;
+import org.telegram.ui.Components.Reels.ReelsStoryViewer;
+import org.telegram.ui.Components.Shorts.ShortsActivity;
+import org.telegram.ui.Components.Shorts.ShortsRepository;
 import org.telegram.messenger.NotificationsController;
 import org.telegram.messenger.OpenAttachedMenuBotReceiver;
 import org.telegram.messenger.PushListenerController;
@@ -1326,10 +1327,6 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
         return false;
     }
 
-    /**
-     * Opens https://{server-public-host}/r/{reelId} and owpg://.../r/{reelId}. The Reel is public,
-     * so this uses the REST detail lookup rather than MTProto.
-     */
     private boolean openReelLink(Uri uri, int account, Browser.Progress progress) {
         final List<String> path = uri.getPathSegments();
         if (path == null || path.size() != 2 || !"r".equals(path.get(0))) {
@@ -1339,33 +1336,10 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
         if (TextUtils.isEmpty(reelId)) {
             return false;
         }
-        final AlertDialog progressDialog;
         if (progress != null) {
-            progress.init();
-            progressDialog = null;
-        } else {
-            progressDialog = new AlertDialog(this, AlertDialog.ALERT_TYPE_SPINNER);
-            progressDialog.showDelayed(300);
+            progress.end();
         }
-        ReelsRepository.loadReel(account, reelId, (item, failure) -> {
-            if (progress != null) {
-                progress.end();
-            }
-            if (progressDialog != null) {
-                try {
-                    progressDialog.dismiss();
-                } catch (Exception ignore) {
-                }
-            }
-            final BaseFragment lastFragment = getLastFragment();
-            if (item == null) {
-                if (lastFragment != null) {
-                    BulletinFactory.of(lastFragment).createErrorBulletin(LocaleController.getString(R.string.ShortsNotFound)).show();
-                }
-                return;
-            }
-            presentFragment(new ReelsViewer(item));
-        });
+        presentFragment(new ReelsStoryViewer(reelId));
         return true;
     }
 
@@ -1382,7 +1356,7 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
         final String username = path.get(0);
         final int messageId;
         try {
-            if (!ReelsRepository.isValidUsername(username)) {
+            if (!ShortsRepository.isValidUsername(username)) {
                 return false;
             }
             messageId = Integer.parseInt(path.get(2));
@@ -1401,7 +1375,7 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
             progressDialog = new AlertDialog(this, AlertDialog.ALERT_TYPE_SPINNER);
             progressDialog.showDelayed(300);
         }
-        ReelsRepository.resolveLink(account, username, messageId, (item, failure) -> {
+        ShortsRepository.resolveLink(account, username, messageId, (item, failure) -> {
             if (progress != null) {
                 progress.end();
             }
@@ -1414,11 +1388,12 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
             final BaseFragment lastFragment = getLastFragment();
             if (item == null) {
                 if (lastFragment != null) {
-                    BulletinFactory.of(lastFragment).createErrorBulletin(LocaleController.getString(R.string.ShortsNotFound)).show();
+                    BulletinFactory.of(lastFragment).createErrorBulletin(LocaleController.getString(
+                            failure == ShortsRepository.LinkCallback.NO_ACCESS ? R.string.ChannelCantOpenPrivate : R.string.MessageNotFound)).show();
                 }
                 return;
             }
-            presentFragment(new ReelsViewer(item));
+            presentFragment(new ShortsActivity(item));
         });
         return true;
     }

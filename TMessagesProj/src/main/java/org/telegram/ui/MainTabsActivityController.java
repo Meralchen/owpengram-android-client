@@ -2,8 +2,4 @@ package org.telegram.ui;
 
 public interface MainTabsActivityController {
     void setTabsVisible(boolean visible);
-
-    default void setReelsViewerActive(boolean active) {
-        setTabsVisible(!active);
-    }
 }
