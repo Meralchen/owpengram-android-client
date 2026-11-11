@@ -505,6 +505,7 @@ public class MessagesController extends BaseController implements NotificationCe
 
     public boolean enableJoined;
     public String linkPrefix;
+    public String publicBaseUrl;
     // OwpenGram: the server's help.getAppConfig advertises owpengram=true. Used to
     // treat links on this account's linkPrefix host as internal owpg links (not the
     // official Telegram network, and not other forks). Mirrors the desktop
@@ -5717,16 +5718,23 @@ public class MessagesController extends BaseController implements NotificationCe
             revokeTimeLimit = config.revoke_time_limit;
             revokeTimePmLimit = config.revoke_pm_time_limit;
             canRevokePmInbox = config.revoke_pm_inbox;
-            linkPrefix = config.me_url_prefix;
+            final String meUrlPrefix = config.me_url_prefix == null ? "" : config.me_url_prefix.trim();
+            publicBaseUrl = meUrlPrefix;
+            while (publicBaseUrl.endsWith("/")) {
+                publicBaseUrl = publicBaseUrl.substring(0, publicBaseUrl.length() - 1);
+            }
+            if (!meUrlPrefix.isEmpty()) {
+                linkPrefix = meUrlPrefix;
+                if (linkPrefix.endsWith("/")) {
+                    linkPrefix = linkPrefix.substring(0, linkPrefix.length() - 1);
+                }
+                if (linkPrefix.startsWith("https://")) {
+                    linkPrefix = linkPrefix.substring(8);
+                } else if (linkPrefix.startsWith("http://")) {
+                    linkPrefix = linkPrefix.substring(7);
+                }
+            }
             boolean forceTryIpV6 = config.force_try_ipv6;
-            if (linkPrefix.endsWith("/")) {
-                linkPrefix = linkPrefix.substring(0, linkPrefix.length() - 1);
-            }
-            if (linkPrefix.startsWith("https://")) {
-                linkPrefix = linkPrefix.substring(8);
-            } else if (linkPrefix.startsWith("http://")) {
-                linkPrefix = linkPrefix.substring(7);
-            }
             callReceiveTimeout = config.call_receive_timeout_ms;
             callRingTimeout = config.call_ring_timeout_ms;
             callConnectTimeout = config.call_connect_timeout_ms;

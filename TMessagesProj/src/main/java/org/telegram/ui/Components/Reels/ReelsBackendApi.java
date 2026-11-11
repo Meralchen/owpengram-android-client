@@ -7,6 +7,7 @@ import android.util.Base64;
 
 import org.json.JSONObject;
 import org.telegram.messenger.AndroidUtilities;
+import org.telegram.messenger.FileLog;
 import org.telegram.messenger.MessagesController;
 import org.telegram.tgnet.ConnectionsManager;
 import org.telegram.tgnet.TLRPC;
@@ -50,18 +51,50 @@ public final class ReelsBackendApi {
     }
 
     public static String baseUrl(int account) {
-        String host = MessagesController.getInstance(account).linkPrefix;
-        if (TextUtils.isEmpty(host)) {
+        final MessagesController controller = MessagesController.getInstance(account);
+        return resolveBaseUrl(controller.publicBaseUrl, controller.linkPrefix);
+    }
+
+    static String resolveBaseUrl(String publicBaseUrl, String linkPrefix) {
+        String base = normalizeBaseUrl(publicBaseUrl);
+        if (base != null) {
+            return base;
+        }
+        base = normalizeBaseUrl(linkPrefix);
+        if (base == null) {
             return null;
         }
-        host = host.trim();
-        while (host.endsWith("/")) {
-            host = host.substring(0, host.length() - 1);
+        if (!base.startsWith("http://") && !base.startsWith("https://")) {
+            base = "https://" + base;
         }
-        if (!host.startsWith("https://") && !host.startsWith("http://")) {
-            host = "https://" + host;
+        return base;
+    }
+
+    private static String normalizeBaseUrl(String value) {
+        if (value == null) {
+            return null;
         }
-        return host;
+        value = value.trim();
+        while (value.endsWith("/")) {
+            value = value.substring(0, value.length() - 1);
+        }
+        return value.isEmpty() ? null : value;
+    }
+
+    private static void logRequestFailure(String method, String url, Exception error) {
+        String scheme = "unknown";
+        String host = "unknown";
+        try {
+            final URL parsed = new URL(url);
+            scheme = parsed.getProtocol();
+            host = parsed.getHost();
+            if (parsed.getPort() >= 0) {
+                host += ":" + parsed.getPort();
+            }
+        } catch (Exception ignored) {
+        }
+        FileLog.w("Reels HTTP " + method + " " + scheme + "://" + host
+                + " failed: " + error.getClass().getName());
     }
 
     public static String absoluteUrl(int account, String pathOrUrl) {
@@ -222,8 +255,8 @@ public final class ReelsBackendApi {
                     }
                     body = result.toString();
                 }
-            } catch (Exception ignore) {
-                // Never log tickets, proof material or media URLs.
+            } catch (Exception error) {
+                logRequestFailure("POST", url, error);
             } finally {
                 if (connection != null) {
                     connection.disconnect();
@@ -280,8 +313,8 @@ public final class ReelsBackendApi {
                     }
                     body = result.toString();
                 }
-            } catch (Exception ignore) {
-                // Network failures become a retryable ReelsError at the repository layer.
+            } catch (Exception error) {
+                logRequestFailure(method, url, error);
             } finally {
                 if (connection != null) {
                     connection.disconnect();

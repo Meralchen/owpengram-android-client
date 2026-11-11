@@ -100,7 +100,6 @@ public final class ReelsRepository {
     private int offset;
     private boolean endReached;
     private boolean loading;
-    private boolean publicFallback;
     private int generation;
 
     private final HashMap<String, Boolean> likePending = new HashMap<>();
@@ -121,7 +120,6 @@ public final class ReelsRepository {
         offset = 0;
         endReached = false;
         loading = false;
-        publicFallback = false;
     }
 
     public ReelsFeedSource getSource() {
@@ -151,18 +149,13 @@ public final class ReelsRepository {
         }
         final int requestGeneration = generation;
         loading = true;
-        final boolean withProof = source.requiresAuth || !publicFallback;
+        final boolean withProof = source.requiresAuth;
         ReelsBackendApi.request(account, "GET", path, null, null, withProof, (body, status) -> {
             if (requestGeneration != generation) {
                 return;
             }
             loading = false;
             if (status < 200 || status >= 300) {
-                if (status == 401 && !source.requiresAuth && !publicFallback) {
-                    publicFallback = true;
-                    loadNextPage(callback);
-                    return;
-                }
                 callback.onPage(null, false, ReelsError.fromResponse(status, body));
                 return;
             }
@@ -184,18 +177,8 @@ public final class ReelsRepository {
         }
         final int requestGeneration = generation;
         final String path = "/api/reels/" + Uri.encode(id);
-        ReelsBackendApi.request(account, "GET", path, null, null, true, (body, status) -> {
+        ReelsBackendApi.request(account, "GET", path, null, null, false, (body, status) -> {
             if (requestGeneration != generation) {
-                return;
-            }
-            if (status == 401) {
-                ReelsBackendApi.invalidateAuthorization(account);
-                ReelsBackendApi.request(account, "GET", path, null, null, false, (publicBody, publicStatus) -> {
-                    if (requestGeneration != generation) {
-                        return;
-                    }
-                    finishSingle(publicBody, publicStatus, callback);
-                });
                 return;
             }
             finishSingle(body, status, callback);
@@ -383,7 +366,7 @@ public final class ReelsRepository {
         } catch (Exception ignore) {
         }
         ReelsBackendApi.request(account, "POST", "/api/reels/" + Uri.encode(item.id) + "/view",
-                body, null, false, (response, status) -> {
+                body, null, true, (response, status) -> {
                     if (status >= 200 && status < 300 && response != null) {
                         try {
                             final JSONObject root = new JSONObject(response);
