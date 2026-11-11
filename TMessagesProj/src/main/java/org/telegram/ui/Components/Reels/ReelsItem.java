@@ -216,6 +216,8 @@ public final class ReelsItem {
     }
 
     public String cacheKey() {
-        return source == Source.PROFILE ? ReelsCache.profileKey(account, reelId) : ReelsCache.keyPrefix(account) + document.id;
+        return source == Source.PROFILE
+                ? ReelsCache.profileKey(account, reelId)
+                : ReelsCache.channelKey(account, channelId, messageId);
     }
 }

@@ -10,14 +10,11 @@ import android.annotation.SuppressLint;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.PorterDuff;
 import android.graphics.PorterDuffColorFilter;
-import android.graphics.RectF;
 import android.graphics.drawable.GradientDrawable;
-import android.os.Bundle;
-import android.os.SystemClock;
-import android.text.TextPaint;
 import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.GestureDetector;
@@ -26,7 +23,6 @@ import android.view.MotionEvent;
 import android.view.TextureView;
 import android.view.View;
 import android.view.ViewConfiguration;
-import android.view.accessibility.AccessibilityNodeInfo;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -41,22 +37,22 @@ import androidx.media3.common.util.UnstableApi;
 import androidx.media3.exoplayer.ExoPlayer;
 
 import org.telegram.messenger.AndroidUtilities;
-import org.telegram.messenger.ChatObject;
-import org.telegram.messenger.FileLoader;
 import org.telegram.messenger.ImageLocation;
 import org.telegram.messenger.LocaleController;
-import org.telegram.messenger.MediaDataController;
 import org.telegram.messenger.MessagesController;
 import org.telegram.messenger.R;
 import org.telegram.tgnet.TLRPC;
-import org.telegram.ui.ActionBar.Theme;
 import org.telegram.ui.Components.AvatarDrawable;
 import org.telegram.ui.Components.BackupImageView;
 import org.telegram.ui.Components.CubicBezierInterpolator;
 import org.telegram.ui.Components.LayoutHelper;
 import org.telegram.ui.Components.RadialProgressView;
 
-/** One fullscreen clip: video surface, top timeline/creator row and bottom/side action overlay. */
+/**
+ * One fullscreen vertical clip. Follows Telegram's media viewer: black stage, white overlay
+ * chrome, thin bottom progress, right action rail and bottom-left creator/caption. All colours
+ * and dimensions come from {@link ReelsTheme}.
+ */
 @OptIn(markerClass = UnstableApi.class)
 @SuppressLint("ViewConstructor")
 public class ReelsPageView extends FrameLayout {
@@ -83,6 +79,7 @@ public class ReelsPageView extends FrameLayout {
     private final TextView subtitleView;
     private final LinearLayout channelRow;
     private final TextView captionView;
+    private final TextView errorView;
     private final View topShade;
     private final View bottomShade;
     private final ActionButton likeButton;
@@ -90,18 +87,21 @@ public class ReelsPageView extends FrameLayout {
     private final ActionButton shareButton;
     private final ActionButton viewsButton;
     private final ImageView heartView;
-    private final FrameLayout overlayContainer;
 
     private ReelsItem item;
     private ExoPlayer player;
     private boolean attached;
     private boolean overlayVisible = true;
     private float videoAspectRatio = 9f / 16f;
+    private int videoWidth;
+    private int videoHeight;
+    private final int bottomInset;
 
     private final Player.Listener playerListener = new Player.Listener() {
         @Override
         public void onPlaybackStateChanged(int playbackState) {
             updateProgressVisibility();
+            errorView.setVisibility(GONE);
             if (playbackState == Player.STATE_READY) {
                 thumbView.animate().alpha(0f).setDuration(ReelsViewer.isReducedMotion() ? 0 : 150).start();
             }
@@ -111,17 +111,22 @@ public class ReelsPageView extends FrameLayout {
         public void onIsPlayingChanged(boolean isPlaying) {
             updatePlayPauseIcon();
             updateProgressVisibility();
-            timelineView.setKeepScreenOn(isPlaying);
+            setKeepScreenOn(isPlaying);
             if (isPlaying) {
-                timelineView.post(timelineUpdater);
+                removeCallbacks(timelineUpdater);
+                post(timelineUpdater);
+            } else {
+                removeCallbacks(timelineUpdater);
             }
         }
 
         @Override
         public void onVideoSizeChanged(@NonNull VideoSize videoSize) {
             if (videoSize.width > 0 && videoSize.height > 0) {
-                videoAspectRatio = (float) videoSize.width / (float) videoSize.height;
-                requestLayout();
+                videoWidth = videoSize.width;
+                videoHeight = videoSize.height;
+                videoAspectRatio = (float) videoWidth / (float) videoHeight;
+                applyVideoTransform();
             }
         }
 
@@ -129,6 +134,7 @@ public class ReelsPageView extends FrameLayout {
         public void onPlayerError(@NonNull PlaybackException error) {
             updateProgressVisibility();
             thumbView.setAlpha(1f);
+            errorView.setVisibility(VISIBLE);
         }
     };
 
@@ -138,7 +144,7 @@ public class ReelsPageView extends FrameLayout {
             if (player == null || !attached) return;
             timelineView.setProgress(player.getCurrentPosition(), player.getDuration());
             if (player.isPlaying()) {
-                postDelayed(this, 16);
+                postDelayed(this, 50);
             }
         }
     };
@@ -146,53 +152,57 @@ public class ReelsPageView extends FrameLayout {
     public ReelsPageView(Context context, Delegate delegate) {
         super(context);
         this.delegate = delegate;
-        setBackgroundColor(Color.BLACK);
+        bottomInset = Math.max(0, AndroidUtilities.navigationBarHeight);
+        setBackgroundColor(ReelsTheme.viewerBackground);
 
         videoView = new TextureView(context);
-        addView(videoView, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT, Gravity.CENTER));
+        addView(videoView, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
 
         thumbView = new BackupImageView(context);
         thumbView.getImageReceiver().setAspectFit(true);
-        addView(thumbView, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT, Gravity.CENTER));
+        addView(thumbView, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
 
         topShade = new View(context);
         topShade.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{0x99000000, 0x44000000, Color.TRANSPARENT}));
+                new int[]{ReelsTheme.viewerScrimTop, ReelsTheme.viewerScrimTopMid, Color.TRANSPARENT}));
         addView(topShade, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 140, Gravity.TOP));
 
         bottomShade = new View(context);
         bottomShade.setBackground(new GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP,
-                new int[]{0xCC000000, 0x66000000, Color.TRANSPARENT}));
-        addView(bottomShade, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 260, Gravity.BOTTOM));
+                new int[]{ReelsTheme.viewerScrimBottom, ReelsTheme.viewerScrimBottomMid, Color.TRANSPARENT}));
+        addView(bottomShade, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 280, Gravity.BOTTOM));
 
-        overlayContainer = new FrameLayout(context);
+        final FrameLayout overlayContainer = new FrameLayout(context);
         addView(overlayContainer, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
 
-        // Top Timeline
+        // Bottom progress with elapsed/total time, like Telegram's media viewer.
         timelineView = new TimelineView(context, pos -> {
             if (delegate != null) delegate.onSeek(this, pos);
         });
-        overlayContainer.addView(timelineView, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 24, Gravity.TOP, 16, 36, 16, 0));
+        overlayContainer.addView(timelineView, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 26,
+                Gravity.BOTTOM, ReelsTheme.sideMargin, 0, ReelsTheme.sideMargin, 4 + bottomInset));
 
-        // Creator badge & Caption (Bottom Left)
-        LinearLayout infoContainer = new LinearLayout(context);
+        // Creator + caption, bottom left.
+        final LinearLayout infoContainer = new LinearLayout(context);
         infoContainer.setOrientation(LinearLayout.VERTICAL);
 
         channelRow = new LinearLayout(context);
         channelRow.setOrientation(LinearLayout.HORIZONTAL);
         channelRow.setGravity(Gravity.CENTER_VERTICAL);
+        channelRow.setMinimumHeight(dp(ReelsTheme.touchTarget));
         channelRow.setOnClickListener(v -> {
             if (delegate != null) delegate.onOpenChannel(this);
         });
 
         avatarView = new BackupImageView(context);
-        avatarView.setRoundRadius(dp(18));
-        channelRow.addView(avatarView, LayoutHelper.createLinear(36, 36, Gravity.CENTER_VERTICAL, 0, 0, 10, 0));
+        avatarView.setRoundRadius(dp(ReelsTheme.avatarSize / 2f));
+        channelRow.addView(avatarView, LayoutHelper.createLinear(ReelsTheme.avatarSize, ReelsTheme.avatarSize,
+                Gravity.CENTER_VERTICAL, 0, 0, 10, 0));
 
-        LinearLayout textCol = new LinearLayout(context);
+        final LinearLayout textCol = new LinearLayout(context);
         textCol.setOrientation(LinearLayout.VERTICAL);
         titleView = new TextView(context);
-        titleView.setTextColor(Color.WHITE);
+        titleView.setTextColor(ReelsTheme.viewerPrimary);
         titleView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 15);
         titleView.setTypeface(AndroidUtilities.bold());
         titleView.setSingleLine(true);
@@ -200,27 +210,27 @@ public class ReelsPageView extends FrameLayout {
         textCol.addView(titleView);
 
         subtitleView = new TextView(context);
-        subtitleView.setTextColor(0xB3FFFFFF);
+        subtitleView.setTextColor(ReelsTheme.viewerSecondary);
         subtitleView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 13);
         subtitleView.setSingleLine(true);
         subtitleView.setEllipsize(TextUtils.TruncateAt.END);
         textCol.addView(subtitleView);
         channelRow.addView(textCol, LayoutHelper.createLinear(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT, Gravity.CENTER_VERTICAL));
 
-        infoContainer.addView(channelRow, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 0, 0, 8));
+        infoContainer.addView(channelRow, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 0, 0, 6));
 
         captionView = new TextView(context);
-        captionView.setTextColor(Color.WHITE);
+        captionView.setTextColor(ReelsTheme.viewerPrimary);
         captionView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 14);
         captionView.setMaxLines(3);
         captionView.setEllipsize(TextUtils.TruncateAt.END);
         infoContainer.addView(captionView, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
 
         overlayContainer.addView(infoContainer, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT,
-                Gravity.BOTTOM | Gravity.LEFT, 16, 0, 80, 28));
+                Gravity.BOTTOM | Gravity.LEFT, ReelsTheme.sideMargin, 0, 76, 34 + bottomInset));
 
-        // Right Action Column
-        LinearLayout actions = new LinearLayout(context);
+        // Right action rail: like, comment, share, views.
+        final LinearLayout actions = new LinearLayout(context);
         actions.setOrientation(LinearLayout.VERTICAL);
         actions.setGravity(Gravity.CENTER_HORIZONTAL);
 
@@ -243,22 +253,38 @@ public class ReelsPageView extends FrameLayout {
         actions.addView(viewsButton);
 
         overlayContainer.addView(actions, LayoutHelper.createFrame(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT,
-                Gravity.BOTTOM | Gravity.RIGHT, 0, 0, 8, 28));
+                Gravity.BOTTOM | Gravity.RIGHT, 0, 0, 4, 30 + bottomInset));
 
         progressView = new RadialProgressView(context);
         progressView.setSize(dp(44));
-        progressView.setProgressColor(Color.WHITE);
+        progressView.setProgressColor(ReelsTheme.viewerPrimary);
         addView(progressView, LayoutHelper.createFrame(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT, Gravity.CENTER));
 
         playIcon = new ImageView(context);
         playIcon.setImageResource(R.drawable.play_mini_video);
-        playIcon.setColorFilter(new PorterDuffColorFilter(Color.WHITE, PorterDuff.Mode.SRC_IN));
+        playIcon.setColorFilter(new PorterDuffColorFilter(ReelsTheme.viewerPrimary, PorterDuff.Mode.SRC_IN));
         playIcon.setVisibility(GONE);
         addView(playIcon, LayoutHelper.createFrame(64, 64, Gravity.CENTER));
 
+        errorView = new TextView(context);
+        errorView.setTextColor(ReelsTheme.viewerSecondary);
+        errorView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 14);
+        errorView.setGravity(Gravity.CENTER);
+        errorView.setPadding(dp(24), dp(10), dp(24), dp(10));
+        errorView.setBackground(ReelsTheme.rounded(ReelsTheme.viewerShadow, 14));
+        errorView.setText(LocaleController.getString(R.string.ShortsLoadFailed));
+        errorView.setVisibility(GONE);
+        errorView.setOnClickListener(v -> {
+            if (player != null) {
+                errorView.setVisibility(GONE);
+                player.prepare();
+            }
+        });
+        addView(errorView, LayoutHelper.createFrame(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT, Gravity.CENTER, 32, 0, 32, 0));
+
         heartView = new ImageView(context);
         heartView.setImageResource(R.drawable.media_like_active);
-        heartView.setColorFilter(new PorterDuffColorFilter(0xFFFF3B30, PorterDuff.Mode.SRC_IN));
+        heartView.setColorFilter(new PorterDuffColorFilter(ReelsTheme.viewerLike, PorterDuff.Mode.SRC_IN));
         heartView.setVisibility(GONE);
         addView(heartView, LayoutHelper.createFrame(96, 96, Gravity.CENTER));
 
@@ -267,6 +293,11 @@ public class ReelsPageView extends FrameLayout {
 
     private void setupGestures(Context context) {
         final GestureDetector gestureDetector = new GestureDetector(context, new GestureDetector.SimpleOnGestureListener() {
+            @Override
+            public boolean onDown(@NonNull MotionEvent e) {
+                return true;
+            }
+
             @Override
             public boolean onSingleTapConfirmed(MotionEvent e) {
                 if (delegate != null) delegate.onTogglePlay(ReelsPageView.this);
@@ -281,29 +312,39 @@ public class ReelsPageView extends FrameLayout {
             }
 
             @Override
-            public void onLongPress(MotionEvent e) {
+            public void onLongPress(@NonNull MotionEvent e) {
                 toggleCleanMode(false);
             }
         });
 
         setOnTouchListener((v, event) -> {
-            boolean handled = gestureDetector.onTouchEvent(event);
+            final boolean handled = gestureDetector.onTouchEvent(event);
             if (event.getAction() == MotionEvent.ACTION_UP || event.getAction() == MotionEvent.ACTION_CANCEL) {
                 if (!overlayVisible) {
                     toggleCleanMode(true);
                 }
             }
-            return handled || true;
+            return handled;
         });
     }
 
     private void toggleCleanMode(boolean show) {
         overlayVisible = show;
-        float targetAlpha = show ? 1f : 0f;
-        int duration = ReelsViewer.isReducedMotion() ? 0 : 200;
+        final float targetAlpha = show ? 1f : 0f;
+        final int duration = ReelsViewer.isReducedMotion() ? 0 : 200;
         topShade.animate().alpha(targetAlpha).setDuration(duration).start();
         bottomShade.animate().alpha(targetAlpha).setDuration(duration).start();
-        overlayContainer.animate().alpha(targetAlpha).setDuration(duration).start();
+        if (timelineView.getParent() instanceof View) {
+            ((View) timelineView.getParent()).animate().alpha(targetAlpha).setDuration(duration).start();
+        }
+        for (int i = 0; i < getChildCount(); i++) {
+            final View child = getChildAt(i);
+            if (child == progressView || child == playIcon || child == heartView || child == errorView
+                    || child == videoView || child == thumbView) {
+                continue;
+            }
+            child.animate().alpha(targetAlpha).setDuration(duration).start();
+        }
     }
 
     public void animateHeart(float x, float y) {
@@ -314,7 +355,15 @@ public class ReelsPageView extends FrameLayout {
         heartView.setScaleY(0.2f);
         heartView.setAlpha(0f);
 
-        AnimatorSet set = new AnimatorSet();
+        if (ReelsViewer.isReducedMotion()) {
+            heartView.setAlpha(1f);
+            heartView.setScaleX(1f);
+            heartView.setScaleY(1f);
+            postDelayed(() -> heartView.setVisibility(GONE), 220);
+            return;
+        }
+
+        final AnimatorSet set = new AnimatorSet();
         set.playTogether(
                 ObjectAnimator.ofFloat(heartView, View.ALPHA, 0f, 1f, 1f, 0f),
                 ObjectAnimator.ofFloat(heartView, View.SCALE_X, 0.2f, 1.25f, 1.0f, 0.8f),
@@ -333,7 +382,8 @@ public class ReelsPageView extends FrameLayout {
 
     public void bind(ReelsItem item, int position) {
         this.item = item;
-        thumbView.setAlpha(1f);
+        thumbView.setAlpha(player != null && player.isPlaying() ? 0f : 1f);
+        errorView.setVisibility(GONE);
         if (item.source == ReelsItem.Source.CHANNEL) {
             bindChannel(item);
         } else {
@@ -341,12 +391,20 @@ public class ReelsPageView extends FrameLayout {
         }
         captionView.setText(item.getCaption() != null ? item.getCaption() : "");
         captionView.setVisibility(TextUtils.isEmpty(item.getCaption()) ? GONE : VISIBLE);
+        videoWidth = item.getVideoWidth();
+        videoHeight = item.getVideoHeight();
+        if (videoWidth > 0 && videoHeight > 0) {
+            videoAspectRatio = (float) videoWidth / (float) videoHeight;
+        } else {
+            videoAspectRatio = 9f / 16f;
+        }
         updateCounters();
+        applyVideoTransform();
     }
 
     private void bindChannel(ReelsItem item) {
-        MessagesController controller = MessagesController.getInstance(item.account);
-        TLRPC.Chat chat = controller.getChat(item.channelId);
+        final MessagesController controller = MessagesController.getInstance(item.account);
+        final TLRPC.Chat chat = controller.getChat(item.channelId);
         if (chat != null) {
             titleView.setText(chat.title);
             subtitleView.setText(chat.username != null ? "@" + chat.username : "");
@@ -354,7 +412,7 @@ public class ReelsPageView extends FrameLayout {
             avatarView.setForUserOrChat(chat, avatarDrawable);
         }
         if (item.document != null) {
-            thumbView.setImage(ImageLocation.getForDocument(item.document), "320_180", null, null, item.messageObject);
+            thumbView.setImage(ImageLocation.getForDocument(item.document), "320_480", null, null, item.messageObject);
         }
     }
 
@@ -362,8 +420,15 @@ public class ReelsPageView extends FrameLayout {
         final String name = !TextUtils.isEmpty(item.creatorName) ? item.creatorName : item.creatorUsername;
         titleView.setText(!TextUtils.isEmpty(name) ? name : "User");
         subtitleView.setText(!TextUtils.isEmpty(item.creatorUsername) ? "@" + item.creatorUsername : "");
-        avatarDrawable.setInfo(item.creatorUsername != null ? item.creatorUsername.hashCode() : 0, name, null);
-        avatarView.setImageDrawable(avatarDrawable);
+        final TLRPC.User user = TextUtils.isEmpty(item.creatorUsername)
+                ? null : MessagesController.getInstance(item.account).getUser(item.creatorUsername);
+        if (user != null) {
+            avatarDrawable.setInfo(user);
+            avatarView.setForUserOrChat(user, avatarDrawable);
+        } else {
+            avatarDrawable.setInfo(item.creatorUsername != null ? item.creatorUsername.hashCode() : 0, name, null);
+            avatarView.setImageDrawable(avatarDrawable);
+        }
         if (!TextUtils.isEmpty(item.thumbnailUrl)) {
             thumbView.setImage(ImageLocation.getForPath(item.thumbnailUrl), "1280_1280", (android.graphics.drawable.Drawable) null, null);
         } else {
@@ -374,7 +439,7 @@ public class ReelsPageView extends FrameLayout {
     public void updateCounters() {
         if (item == null) return;
         likeButton.setIcon(item.liked ? R.drawable.media_like_active : R.drawable.media_like,
-                item.liked ? 0xFFFF3B30 : Color.WHITE);
+                item.liked ? ReelsTheme.viewerLike : ReelsTheme.viewerPrimary);
         likeButton.setText(item.likes > 0 ? String.valueOf(item.likes) : "");
         commentsButton.setText(item.comments > 0 ? String.valueOf(item.comments) : "");
         viewsButton.setText(item.views > 0 ? String.valueOf(item.views) : "");
@@ -395,6 +460,7 @@ public class ReelsPageView extends FrameLayout {
         super.onDetachedFromWindow();
         attached = false;
         removeCallbacks(timelineUpdater);
+        setKeepScreenOn(false);
     }
 
     public void attachPlayer(ExoPlayer newPlayer) {
@@ -421,6 +487,7 @@ public class ReelsPageView extends FrameLayout {
             player = null;
         }
         removeCallbacks(timelineUpdater);
+        setKeepScreenOn(false);
         thumbView.setAlpha(1f);
     }
 
@@ -437,7 +504,7 @@ public class ReelsPageView extends FrameLayout {
             progressView.setVisibility(GONE);
             return;
         }
-        boolean loading = player.getPlaybackState() == Player.STATE_BUFFERING;
+        final boolean loading = player.getPlaybackState() == Player.STATE_BUFFERING;
         progressView.setVisibility(loading ? VISIBLE : GONE);
     }
 
@@ -446,13 +513,21 @@ public class ReelsPageView extends FrameLayout {
             playIcon.setVisibility(GONE);
             return;
         }
-        boolean playing = player.isPlaying();
+        final boolean playing = player.isPlaying();
         if (!playing && player.getPlaybackState() == Player.STATE_READY) {
-            playIcon.setScaleX(0.8f);
-            playIcon.setScaleY(0.8f);
-            playIcon.setAlpha(0f);
-            playIcon.setVisibility(VISIBLE);
-            playIcon.animate().alpha(1f).scaleX(1.1f).scaleY(1.1f).setDuration(180).start();
+            if (playIcon.getVisibility() != VISIBLE) {
+                playIcon.setScaleX(0.8f);
+                playIcon.setScaleY(0.8f);
+                playIcon.setAlpha(0f);
+                playIcon.setVisibility(VISIBLE);
+                if (ReelsViewer.isReducedMotion()) {
+                    playIcon.setAlpha(1f);
+                    playIcon.setScaleX(1f);
+                    playIcon.setScaleY(1f);
+                } else {
+                    playIcon.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(180).start();
+                }
+            }
         } else {
             playIcon.animate().alpha(0f).scaleX(0.8f).scaleY(0.8f).setDuration(180)
                     .withEndAction(() -> playIcon.setVisibility(GONE)).start();
@@ -460,113 +535,174 @@ public class ReelsPageView extends FrameLayout {
     }
 
     @Override
-    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-        int width = MeasureSpec.getSize(widthMeasureSpec);
-        int height = MeasureSpec.getSize(heightMeasureSpec);
-        super.onMeasure(widthMeasureSpec, heightMeasureSpec);
-
-        if (videoView != null && width > 0 && height > 0) {
-            float viewRatio = (float) width / (float) height;
-            int vWidth, vHeight;
-            if (viewRatio > videoAspectRatio) {
-                vWidth = width;
-                vHeight = (int) (width / videoAspectRatio);
-            } else {
-                vHeight = height;
-                vWidth = (int) (height * videoAspectRatio);
-            }
-            videoView.measure(MeasureSpec.makeMeasureSpec(vWidth, MeasureSpec.EXACTLY),
-                    MeasureSpec.makeMeasureSpec(vHeight, MeasureSpec.EXACTLY));
-        }
+    protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+        super.onSizeChanged(w, h, oldw, oldh);
+        applyVideoTransform();
     }
 
-    // Timeline view for top progress
+    /** Center-crops the video into the page, like Telegram's fullscreen media viewer. */
+    private void applyVideoTransform() {
+        final int width = getWidth();
+        final int height = getHeight();
+        if (width <= 0 || height <= 0 || videoWidth <= 0 || videoHeight <= 0 || videoView == null) {
+            return;
+        }
+        final float scale = Math.max((float) width / (float) videoWidth, (float) height / (float) videoHeight);
+        final Matrix matrix = new Matrix();
+        matrix.setScale(scale, scale);
+        matrix.postTranslate((width - videoWidth * scale) / 2f, (height - videoHeight * scale) / 2f);
+        videoView.setTransform(matrix);
+    }
+
+    /** Thin bottom progress line with elapsed/total time and drag-to-seek. */
     private static class TimelineView extends View {
         private final Paint progressPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint backgroundPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final SeekCallback seekCallback;
+        private final int touchSlop;
+
         private long currentPosition;
         private long duration;
-        private final UtilitiesCallback seekCallback;
+        private int lastProgressWidth = -1;
+        private int lastSeconds = -1;
+        private boolean seeking;
+        private float downX;
+        private float downY;
 
-        interface UtilitiesCallback {
+        interface SeekCallback {
             void onSeek(long positionMs);
         }
 
-        public TimelineView(Context context, UtilitiesCallback seekCallback) {
+        TimelineView(Context context, SeekCallback seekCallback) {
             super(context);
             this.seekCallback = seekCallback;
-            progressPaint.setColor(Color.WHITE);
-            backgroundPaint.setColor(0x44FFFFFF);
+            progressPaint.setColor(ReelsTheme.viewerPrimary);
+            backgroundPaint.setColor(ReelsTheme.viewerTrack);
+            textPaint.setColor(ReelsTheme.viewerSecondary);
+            textPaint.setTextSize(dp(10));
+            touchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
+            setClickable(true);
         }
 
-        private int lastRenderedWidth = -1;
-
-        // Bolt optimization: avoid redundant view invalidations during the 60fps playback loop
-        // when the visible progress bar pixel width has not changed.
+        // Avoid redundant invalidations while the progress pixel width and label are unchanged.
         public void setProgress(long current, long total) {
-            if (this.currentPosition == current && this.duration == total) {
+            final int seconds = (int) (current / 1000);
+            final int viewWidth = getWidth();
+            final int progressPx = viewWidth > 0 && total > 0
+                    ? (int) (viewWidth * Math.min(1f, (float) current / (float) total)) : 0;
+            if (this.currentPosition == current && this.duration == total
+                    && progressPx == lastProgressWidth && seconds == lastSeconds) {
                 return;
             }
             this.currentPosition = current;
             this.duration = total;
-            int viewWidth = getWidth();
-            if (viewWidth > 0 && total > 0) {
-                int progressPx = (int) (viewWidth * Math.min(1f, (float) current / (float) total));
-                if (progressPx == lastRenderedWidth) {
-                    return;
-                }
-                lastRenderedWidth = progressPx;
-            }
+            this.lastSeconds = seconds;
+            this.lastProgressWidth = progressPx;
             invalidate();
         }
 
         @Override
         protected void onDraw(Canvas canvas) {
-            float h = dp(2.5f);
-            float y = (getHeight() - h) / 2f;
-            canvas.drawRect(0, y, getWidth(), y + h, backgroundPaint);
+            final float barHeight = dp(ReelsTheme.progressHeight);
+            final float barY = getHeight() - barHeight - dp(1);
+            canvas.drawRect(0, barY, getWidth(), barY + barHeight, backgroundPaint);
             if (duration > 0) {
-                float progress = Math.min(1f, (float) currentPosition / (float) duration);
-                float progressWidth = getWidth() * progress;
-                lastRenderedWidth = (int) progressWidth;
-                canvas.drawRect(0, y, progressWidth, y + h, progressPaint);
+                final float progress = Math.min(1f, (float) currentPosition / (float) duration);
+                canvas.drawRect(0, barY, getWidth() * progress, barY + barHeight, progressPaint);
             }
+
+            final int seconds = (int) (currentPosition / 1000);
+            final int totalSeconds = (int) (duration / 1000);
+            textPaint.setTextAlign(Paint.Align.LEFT);
+            canvas.drawText(AndroidUtilities.formatDuration(seconds, false), 0, barY - dp(6), textPaint);
+            if (totalSeconds > 0) {
+                textPaint.setTextAlign(Paint.Align.RIGHT);
+                canvas.drawText(AndroidUtilities.formatDuration(totalSeconds, false), getWidth(), barY - dp(6), textPaint);
+            }
+        }
+
+        @SuppressLint("ClickableViewAccessibility")
+        @Override
+        public boolean onTouchEvent(MotionEvent event) {
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    seeking = true;
+                    downX = event.getX();
+                    downY = event.getY();
+                    getParent().requestDisallowInterceptTouchEvent(true);
+                    return true;
+                case MotionEvent.ACTION_MOVE:
+                    if (Math.abs(event.getY() - downY) > touchSlop
+                            && Math.abs(event.getY() - downY) > Math.abs(event.getX() - downX)) {
+                        seeking = false;
+                        getParent().requestDisallowInterceptTouchEvent(false);
+                        return false;
+                    }
+                    return true;
+                case MotionEvent.ACTION_UP:
+                    if (seeking && duration > 0) {
+                        final float fraction = Math.max(0f, Math.min(1f, event.getX() / Math.max(1f, getWidth())));
+                        if (seekCallback != null) {
+                            seekCallback.onSeek((long) (duration * fraction));
+                        }
+                        performClick();
+                    }
+                    seeking = false;
+                    getParent().requestDisallowInterceptTouchEvent(false);
+                    return true;
+                case MotionEvent.ACTION_CANCEL:
+                    seeking = false;
+                    getParent().requestDisallowInterceptTouchEvent(false);
+                    return false;
+            }
+            return super.onTouchEvent(event);
+        }
+
+        @Override
+        public boolean performClick() {
+            super.performClick();
+            return true;
         }
     }
 
-    // Action button on right
+    /** Rail button: 28 dp icon, 12 sp count, 48 dp touch target, white with a soft shadow. */
     private static class ActionButton extends LinearLayout {
         private final ImageView iconView;
         private final TextView textView;
 
-        public ActionButton(Context context, int iconRes, Runnable onClick) {
+        ActionButton(Context context, int iconRes, Runnable onClick) {
             super(context);
             setOrientation(VERTICAL);
             setGravity(Gravity.CENTER_HORIZONTAL);
-            setPadding(dp(6), dp(10), dp(6), dp(10));
+            setMinimumWidth(dp(ReelsTheme.touchTarget));
+            setMinimumHeight(dp(ReelsTheme.touchTarget));
+            setPadding(dp(10), dp(8), dp(10), dp(8));
 
             iconView = new ImageView(context);
             iconView.setImageResource(iconRes);
-            iconView.setColorFilter(new PorterDuffColorFilter(Color.WHITE, PorterDuff.Mode.SRC_IN));
-            addView(iconView, LayoutHelper.createLinear(32, 32));
+            iconView.setColorFilter(new PorterDuffColorFilter(ReelsTheme.viewerPrimary, PorterDuff.Mode.SRC_IN));
+            addView(iconView, LayoutHelper.createLinear(ReelsTheme.actionIconSize, ReelsTheme.actionIconSize));
 
             textView = new TextView(context);
-            textView.setTextColor(Color.WHITE);
-            textView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 12);
+            textView.setTextColor(ReelsTheme.viewerPrimary);
+            textView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 11);
+            textView.setTypeface(AndroidUtilities.bold());
             textView.setGravity(Gravity.CENTER);
-            addView(textView, LayoutHelper.createLinear(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT, 0, 4, 0, 0));
+            textView.setShadowLayer(dp(2), 0, dp(1), ReelsTheme.viewerShadow);
+            addView(textView, LayoutHelper.createLinear(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT, 0, 3, 0, 0));
 
             if (onClick != null) {
                 setOnClickListener(v -> onClick.run());
             }
         }
 
-        public void setIcon(int res, int color) {
+        void setIcon(int res, int color) {
             iconView.setImageResource(res);
             iconView.setColorFilter(new PorterDuffColorFilter(color, PorterDuff.Mode.SRC_IN));
         }
 
-        public void setText(String text) {
+        void setText(String text) {
             textView.setText(text);
             textView.setVisibility(TextUtils.isEmpty(text) ? GONE : VISIBLE);
         }

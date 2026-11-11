@@ -3,6 +3,7 @@ package org.telegram.ui.Components.Reels;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.database.Cursor;
+import android.graphics.PorterDuff;
 import android.media.MediaMetadataRetriever;
 import android.net.Uri;
 import android.provider.OpenableColumns;
@@ -131,9 +132,13 @@ public final class ReelsUploadController {
         AlertDialog.Builder builder = new AlertDialog.Builder(context);
         builder.setTitle(LocaleController.getString(R.string.ShortsUploadReel));
         statusView = new TextView(context);
+        statusView.setTextColor(ReelsTheme.textPrimary(null));
         statusView.setText(LocaleController.getString(R.string.ShortsUploadPreparing));
         statusView.setPadding(AndroidUtilities.dp(24), AndroidUtilities.dp(16), AndroidUtilities.dp(24), 0);
         progressBar = new ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal);
+        if (progressBar.getProgressDrawable() != null) {
+            progressBar.getProgressDrawable().setColorFilter(ReelsTheme.accent(null), PorterDuff.Mode.SRC_IN);
+        }
         progressBar.setMax(100);
         progressBar.setProgress(0);
         progressBar.setPadding(AndroidUtilities.dp(24), AndroidUtilities.dp(8), AndroidUtilities.dp(24), AndroidUtilities.dp(16));

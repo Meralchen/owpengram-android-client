@@ -23,7 +23,7 @@ import java.util.Collections;
 import java.util.regex.Pattern;
 
 /**
- * The public horizontal feed and profile-Reel interactions use REST. Channel-backed items
+ * The public vertical feed and profile-Reel interactions use REST. Channel-backed items
  * resolve to normal MTProto messages and keep their existing reaction/discussion RPCs.
  */
 public final class ReelsRepository {

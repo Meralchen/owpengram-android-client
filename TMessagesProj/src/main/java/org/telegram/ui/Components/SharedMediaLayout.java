@@ -192,7 +192,7 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
     public static final int TAB_GROUPUSERS = 7;
     public static final int TAB_STORIES = 8;
     public static final int TAB_ARCHIVED_STORIES = 9;
-    public static final int TAB_REELS = 15;
+    public static final int TAB_REELS = 16;
     public static final int TAB_RECOMMENDED_CHANNELS = 10;
     public static final int TAB_SAVED_DIALOGS = 11;
     public static final int TAB_SAVED_MESSAGES = 12;
@@ -3873,7 +3873,7 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
             @Override public void onUpload() {
                 startProfileReelUpload();
             }
-        });
+        }, resourcesProvider);
         page.profileReelsView.setVisibility(View.GONE);
         page.addView(page.profileReelsView, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT, Gravity.FILL, 0, 48 + 6, 0, 0));
         return page.profileReelsView;

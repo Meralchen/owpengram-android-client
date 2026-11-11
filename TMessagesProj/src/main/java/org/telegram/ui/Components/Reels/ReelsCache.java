@@ -18,11 +18,11 @@ import org.telegram.messenger.Utilities;
 
 import java.io.File;
 import java.util.ArrayList;
-import java.util.Collections;
 
 /**
- * Process-wide LRU cache (<= 512 MiB, private app dir) for channel MTProto streams and
- * authenticated profile-Reel media. Keys are account-scoped so logout drops only that account.
+ * Process-wide LRU cache (<= 512 MiB, private app dir) for channel MTProto streams and public
+ * profile-Reel media. Ready Reels are public, so profile playback never carries an expiring
+ * Telegram authorization header and survives the five-minute export proof.
  */
 @OptIn(markerClass = UnstableApi.class)
 public final class ReelsCache {
@@ -54,19 +54,19 @@ public final class ReelsCache {
     }
 
     static String profileKey(int account, String reelId) {
-        return "reels-profile:" + account + ":" + reelId;
+        return keyPrefix(account) + "profile:" + reelId;
     }
 
-    /** Keeps channel media on MTProto and profile media on authenticated byte-range HTTP. */
+    static String channelKey(int account, long channelId, int messageId) {
+        return keyPrefix(account) + "channel:" + channelId + ":" + messageId;
+    }
+
+    /** Keeps channel media on MTProto and profile media on public byte-range HTTP. */
     public static DataSource.Factory dataSourceFactory(Context context, ReelsItem item) {
         final String key = item.cacheKey();
         final DataSource.Factory upstream;
         if (item.source == ReelsItem.Source.PROFILE) {
-            final DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory();
-            if (item.playbackAuthorizationHeader != null) {
-                http.setDefaultRequestProperties(Collections.singletonMap("Authorization", item.playbackAuthorizationHeader));
-            }
-            upstream = http;
+            upstream = new DefaultHttpDataSource.Factory();
         } else {
             upstream = FileStreamLoadOperation::new;
         }
@@ -87,9 +87,8 @@ public final class ReelsCache {
             try {
                 final SimpleCache c = get(ApplicationLoader.applicationContext);
                 final String prefix = keyPrefix(account);
-                final String profilePrefix = "reels-profile:" + account + ":";
                 for (String key : new ArrayList<>(c.getKeys())) {
-                    if (key.startsWith(prefix) || key.startsWith(profilePrefix)) {
+                    if (key.startsWith(prefix)) {
                         c.removeResource(key);
                     }
                 }

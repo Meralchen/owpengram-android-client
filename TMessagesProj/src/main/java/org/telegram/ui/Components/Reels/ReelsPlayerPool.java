@@ -16,21 +16,19 @@ import androidx.media3.exoplayer.source.ProgressiveMediaSource;
 
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Map;
-import java.util.Set;
 
 /**
- * Bounded horizontal player pool: the current clip and its immediate horizontal neighbors
- * (left and right), never more than {@link #MAX_PLAYERS} ExoPlayer instances.
- * Keyed by horizontal adapter position.
+ * Bounded vertical player pool: the current clip plus its neighbours, never more than
+ * {@link #MAX_PLAYERS} ExoPlayer instances. Profile media is public, so no authorization
+ * handshake is needed before playback can start.
  */
 @OptIn(markerClass = UnstableApi.class)
 public final class ReelsPlayerPool {
 
     public static final int MAX_PLAYERS = 3;
-    private static final int AHEAD = 1;  // Right neighbor
-    private static final int BEHIND = 1; // Left neighbor
+    private static final int AHEAD = 1;
+    private static final int BEHIND = 1;
 
     public interface Listener {
         void onPlayerReady();
@@ -50,9 +48,8 @@ public final class ReelsPlayerPool {
     private final Context app;
     private final Listener listener;
     private final Map<Integer, Entry> pool = new HashMap<>();
-    private final Set<String> pendingAuthorization = new HashSet<>();
     private int current = -1;
-    private int generation;
+    private boolean muted;
 
     public ReelsPlayerPool(Context context, Listener listener) {
         app = context.getApplicationContext();
@@ -70,10 +67,6 @@ public final class ReelsPlayerPool {
             entry = null;
         }
         if (entry == null) {
-            if (item.source == ReelsItem.Source.PROFILE && item.playbackAuthorizationHeader == null) {
-                prepareProfileAuthorization(position, item);
-                return null;
-            }
             final ExoPlayer player = create(item);
             if (player == null) {
                 return null;
@@ -90,11 +83,22 @@ public final class ReelsPlayerPool {
         return entry != null ? entry.player : null;
     }
 
-    /** Moves the window horizontally, pausing and releasing players outside the current clip's neighbors. */
+    /** Moves the vertical window, pausing and releasing players outside the current neighbours. */
     public void setCurrent(int position) {
         current = position;
         pauseAll();
         trim();
+    }
+
+    public void setMuted(boolean muted) {
+        this.muted = muted;
+        for (Entry entry : pool.values()) {
+            entry.player.setVolume(muted ? 0f : 1f);
+        }
+    }
+
+    public boolean isMuted() {
+        return muted;
     }
 
     /** Detaches the player from whatever view it had before rendering into the new one. */
@@ -132,39 +136,11 @@ public final class ReelsPlayerPool {
     }
 
     public void release() {
-        generation++;
-        pendingAuthorization.clear();
         for (Entry entry : pool.values()) {
             releaseEntry(entry);
         }
         pool.clear();
         current = -1;
-    }
-
-    private void prepareProfileAuthorization(int position, ReelsItem item) {
-        if (!pendingAuthorization.add(item.reelId)) {
-            return;
-        }
-        final int requestGeneration = generation;
-        ReelsBackendApi.authorizationHeader(item.account, header -> {
-            pendingAuthorization.remove(item.reelId);
-            if (header == null || requestGeneration != generation) {
-                return;
-            }
-            item.playbackAuthorizationHeader = header;
-            if (position < current - BEHIND || position > current + AHEAD || pool.containsKey(position)) {
-                return;
-            }
-            final ExoPlayer player = create(item);
-            if (player == null) {
-                return;
-            }
-            pool.put(position, new Entry(player, item));
-            trim();
-            if (listener != null) {
-                listener.onPlayerReady();
-            }
-        });
     }
 
     private void trim() {
@@ -219,6 +195,7 @@ public final class ReelsPlayerPool {
                 .build(), true);
         player.setRepeatMode(Player.REPEAT_MODE_ONE);
         player.setPlayWhenReady(false);
+        player.setVolume(muted ? 0f : 1f);
         player.setMediaSource(new ProgressiveMediaSource.Factory(ReelsCache.dataSourceFactory(app, item))
                 .createMediaSource(MediaItem.fromUri(uri)));
         if (item.resumePositionMs > 0) {

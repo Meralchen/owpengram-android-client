@@ -2,6 +2,8 @@ package org.telegram.ui.Components.Reels;
 
 import android.content.Context;
 import android.graphics.Color;
+import android.graphics.PorterDuff;
+import android.graphics.PorterDuffColorFilter;
 import android.graphics.drawable.GradientDrawable;
 import android.text.TextUtils;
 import android.util.TypedValue;
@@ -9,8 +11,10 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.TextView;
 
+import androidx.annotation.Nullable;
 import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
@@ -20,10 +24,8 @@ import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.FileLoader;
 import org.telegram.messenger.ImageLocation;
 import org.telegram.messenger.LocaleController;
-import org.telegram.messenger.MessagesController;
 import org.telegram.messenger.NotificationCenter;
 import org.telegram.messenger.R;
-import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.ActionBar.Theme;
 import org.telegram.ui.Components.BackupImageView;
 import org.telegram.ui.Components.LayoutHelper;
@@ -32,7 +34,11 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 
-/** Public profile grid that preserves REST-owned and channel-backed Reel sources. */
+/**
+ * Profile Reels tab: 3-column 9:16 grid with Telegram-theme chrome. Profile covers use the public
+ * {@code thumbnailUrl}; rows without a cover show a gradient/initial placeholder, and opaque
+ * channel items are resolved lazily without blocking the grid.
+ */
 public final class ReelsProfileGridView extends FrameLayout implements NotificationCenter.NotificationCenterDelegate {
 
     public interface Delegate {
@@ -52,6 +58,7 @@ public final class ReelsProfileGridView extends FrameLayout implements Notificat
     private final String username;
     private final boolean ownProfile;
     private final Delegate delegate;
+    private final Theme.ResourcesProvider provider;
     private final ArrayList<Entry> entries = new ArrayList<>();
     private final RecyclerView grid;
     private final TextView stateView;
@@ -65,19 +72,25 @@ public final class ReelsProfileGridView extends FrameLayout implements Notificat
     private int requestGeneration;
 
     public ReelsProfileGridView(Context context, int account, String username, boolean ownProfile, Delegate delegate) {
+        this(context, account, username, ownProfile, delegate, null);
+    }
+
+    public ReelsProfileGridView(Context context, int account, String username, boolean ownProfile, Delegate delegate,
+                                @Nullable Theme.ResourcesProvider provider) {
         super(context);
         this.account = account;
         this.username = username;
         this.ownProfile = ownProfile;
         this.delegate = delegate;
-        setBackgroundColor(Theme.getColor(Theme.key_windowBackgroundWhite));
+        this.provider = provider;
 
         grid = new RecyclerView(context);
         grid.setLayoutManager(new GridLayoutManager(context, 3));
         grid.setAdapter(adapter);
-        grid.setBackgroundColor(Theme.getColor(Theme.key_windowBackgroundWhite));
+        grid.setClipToPadding(false);
         grid.addOnScrollListener(new RecyclerView.OnScrollListener() {
-            @Override public void onScrolled(RecyclerView recyclerView, int dx, int dy) {
+            @Override
+            public void onScrolled(RecyclerView recyclerView, int dx, int dy) {
                 GridLayoutManager manager = (GridLayoutManager) recyclerView.getLayoutManager();
                 if (manager != null && manager.findLastVisibleItemPosition() >= entries.size() - 4) loadNextPage();
             }
@@ -92,26 +105,26 @@ public final class ReelsProfileGridView extends FrameLayout implements Notificat
 
         uploadButton = new TextView(context);
         uploadButton.setText(LocaleController.getString(R.string.ShortsUploadReel));
-        uploadButton.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 14);
+        uploadButton.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 13);
+        uploadButton.setTypeface(AndroidUtilities.bold());
         uploadButton.setGravity(Gravity.CENTER);
-        uploadButton.setPadding(AndroidUtilities.dp(18), AndroidUtilities.dp(10), AndroidUtilities.dp(18), AndroidUtilities.dp(10));
+        uploadButton.setPadding(AndroidUtilities.dp(16), AndroidUtilities.dp(8), AndroidUtilities.dp(16), AndroidUtilities.dp(8));
+        uploadButton.setMinimumHeight(AndroidUtilities.dp(36));
         uploadButton.setOnClickListener(v -> delegate.onUpload());
-        addView(uploadButton, LayoutHelper.createFrame(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT, Gravity.TOP | Gravity.RIGHT, 0, 8, 12, 0));
+        addView(uploadButton, LayoutHelper.createFrame(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT,
+                Gravity.TOP | Gravity.RIGHT, 0, 10, 12, 0));
         updateThemeColors();
 
         loadNextPage();
     }
 
     private void updateThemeColors() {
-        int bg = Theme.getColor(Theme.key_windowBackgroundWhite);
+        final int bg = ReelsTheme.background(provider);
         setBackgroundColor(bg);
         grid.setBackgroundColor(bg);
-        stateView.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteGrayText));
-        uploadButton.setTextColor(Theme.getColor(Theme.key_featuredStickers_buttonText));
-        GradientDrawable uploadBg = new GradientDrawable();
-        uploadBg.setColor(Theme.getColor(Theme.key_featuredStickers_addButton));
-        uploadBg.setCornerRadius(AndroidUtilities.dp(8));
-        uploadButton.setBackground(uploadBg);
+        stateView.setTextColor(ReelsTheme.textSecondary(provider));
+        uploadButton.setTextColor(ReelsTheme.accentText(provider));
+        uploadButton.setBackground(ReelsTheme.rounded(ReelsTheme.accent(provider), 18));
         uploadButton.setVisibility(ownProfile ? View.VISIBLE : View.GONE);
     }
 
@@ -119,7 +132,8 @@ public final class ReelsProfileGridView extends FrameLayout implements Notificat
         if (grid != null) grid.smoothScrollToPosition(0);
     }
 
-    @Override protected void onAttachedToWindow() {
+    @Override
+    protected void onAttachedToWindow() {
         super.onAttachedToWindow();
         if (!observingTheme) {
             NotificationCenter.getGlobalInstance().addObserver(this, NotificationCenter.didSetNewTheme);
@@ -127,7 +141,8 @@ public final class ReelsProfileGridView extends FrameLayout implements Notificat
         }
     }
 
-    @Override protected void onDetachedFromWindow() {
+    @Override
+    protected void onDetachedFromWindow() {
         super.onDetachedFromWindow();
         if (observingTheme) {
             NotificationCenter.getGlobalInstance().removeObserver(this, NotificationCenter.didSetNewTheme);
@@ -135,7 +150,8 @@ public final class ReelsProfileGridView extends FrameLayout implements Notificat
         }
     }
 
-    @Override public void didReceivedNotification(int id, int account, Object... args) {
+    @Override
+    public void didReceivedNotification(int id, int account, Object... args) {
         if (id == NotificationCenter.didSetNewTheme) {
             updateThemeColors();
             adapter.notifyDataSetChanged();
@@ -173,22 +189,22 @@ public final class ReelsProfileGridView extends FrameLayout implements Notificat
             loading = false;
             if (status >= 200 && status < 300 && body != null) {
                 try {
-                    JSONObject response = new JSONObject(body);
-                    JSONArray values = response.optJSONArray("items");
+                    final JSONObject response = new JSONObject(body);
+                    final JSONArray values = response.optJSONArray("items");
                     if (values != null) {
                         for (int i = 0; i < values.length(); i++) {
-                            JSONObject object = values.optJSONObject(i);
+                            final JSONObject object = values.optJSONObject(i);
                             if (object == null) continue;
-                            Entry entry = new Entry();
+                            final Entry entry = new Entry();
                             entry.caption = object.optString("caption", "");
                             entry.shareUrl = object.optString("shareUrl", "");
-                            String source = object.optString("source", "");
+                            final String source = object.optString("source", "");
                             if ("profile".equals(source) || object.has("mediaUrl")) {
                                 entry.item = ReelsItem.fromProfile(account, object);
                                 if (entry.item != null) entries.add(entry);
                                 continue;
                             }
-                            JSONObject channel = object.optJSONObject("channel");
+                            final JSONObject channel = object.optJSONObject("channel");
                             entry.channelUsername = object.optString("channelUsername",
                                     channel != null ? channel.optString("username", "") : "");
                             entry.messageId = object.optInt("messageId", object.optInt("message_id", 0));
@@ -242,48 +258,102 @@ public final class ReelsProfileGridView extends FrameLayout implements Notificat
         }
     }
 
-    private final class Adapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
-        @Override public int getItemCount() { return entries.size(); }
+    private String initialFor(Entry entry) {
+        String name = entry.item != null ? entry.item.creatorName : entry.channelUsername;
+        if (TextUtils.isEmpty(name) && entry.item != null) name = entry.item.creatorUsername;
+        if (TextUtils.isEmpty(name)) name = username;
+        return TextUtils.isEmpty(name) ? "" : name.substring(0, 1).toUpperCase();
+    }
 
-        @Override public RecyclerView.ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
-            FrameLayout frame = new FrameLayout(parent.getContext()) {
-                @Override protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-                    int w = MeasureSpec.getSize(widthMeasureSpec);
-                    super.onMeasure(widthMeasureSpec, MeasureSpec.makeMeasureSpec((int) (w * 16f / 9f), MeasureSpec.EXACTLY));
+    private final class Adapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
+        @Override
+        public int getItemCount() {
+            return entries.size();
+        }
+
+        @Override
+        public RecyclerView.ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
+            final FrameLayout frame = new FrameLayout(parent.getContext()) {
+                @Override
+                protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+                    final int width = MeasureSpec.getSize(widthMeasureSpec);
+                    super.onMeasure(widthMeasureSpec, MeasureSpec.makeMeasureSpec((int) (width * 16f / 9f), MeasureSpec.EXACTLY));
                 }
             };
-            frame.setPadding(AndroidUtilities.dp(1), AndroidUtilities.dp(1), AndroidUtilities.dp(1), AndroidUtilities.dp(1));
-            BackupImageView thumb = new BackupImageView(parent.getContext());
+            frame.setPadding(AndroidUtilities.dp(ReelsTheme.gridGap), AndroidUtilities.dp(ReelsTheme.gridGap),
+                    AndroidUtilities.dp(ReelsTheme.gridGap), AndroidUtilities.dp(ReelsTheme.gridGap));
+
+            final TextView placeholder = new TextView(parent.getContext());
+            placeholder.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 24);
+            placeholder.setTypeface(AndroidUtilities.bold());
+            placeholder.setGravity(Gravity.CENTER);
+            placeholder.setTextColor(ReelsTheme.accent(provider));
+            frame.addView(placeholder, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
+
+            final BackupImageView thumb = new BackupImageView(parent.getContext());
+            thumb.setRoundRadius(AndroidUtilities.dp(ReelsTheme.gridRadius));
             thumb.getImageReceiver().setAspectFit(false);
             frame.addView(thumb, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
-            View shade = new View(parent.getContext());
-            shade.setBackground(new GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, new int[]{0x99000000, Color.TRANSPARENT}));
-            frame.addView(shade, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 64, Gravity.BOTTOM));
-            TextView views = new TextView(parent.getContext());
-            views.setTextColor(Color.WHITE);
+
+            final ImageView play = new ImageView(parent.getContext());
+            play.setImageResource(R.drawable.play_mini_video);
+            play.setColorFilter(new PorterDuffColorFilter(ReelsTheme.viewerPrimary, PorterDuff.Mode.SRC_IN));
+            play.setAlpha(0.9f);
+            frame.addView(play, LayoutHelper.createFrame(24, 24, Gravity.CENTER));
+
+            final View shade = new View(parent.getContext());
+            shade.setBackground(new GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP,
+                    new int[]{0x99000000, Color.TRANSPARENT}));
+            frame.addView(shade, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 56, Gravity.BOTTOM));
+
+            final TextView views = new TextView(parent.getContext());
+            views.setTextColor(ReelsTheme.viewerPrimary);
             views.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 11);
-            frame.addView(views, LayoutHelper.createFrame(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT, Gravity.BOTTOM | Gravity.LEFT, 6, 0, 6, 6));
+            views.setTypeface(AndroidUtilities.bold());
+            frame.addView(views, LayoutHelper.createFrame(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT,
+                    Gravity.BOTTOM | Gravity.LEFT, 6, 0, 6, 5));
             return new RecyclerView.ViewHolder(frame) {};
         }
 
-        @Override public void onBindViewHolder(RecyclerView.ViewHolder holder, int position) {
-            FrameLayout frame = (FrameLayout) holder.itemView;
-            BackupImageView thumb = (BackupImageView) frame.getChildAt(0);
-            TextView views = (TextView) frame.getChildAt(2);
-            Entry entry = entries.get(position);
+        @Override
+        public void onBindViewHolder(RecyclerView.ViewHolder holder, int position) {
+            final FrameLayout frame = (FrameLayout) holder.itemView;
+            final TextView placeholder = (TextView) frame.getChildAt(0);
+            final BackupImageView thumb = (BackupImageView) frame.getChildAt(1);
+            final TextView views = (TextView) frame.getChildAt(4);
+            final Entry entry = entries.get(position);
+            final String initial = initialFor(entry);
+
+            placeholder.setText(initial);
+            final GradientDrawable placeholderBackground = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                    new int[]{withAlpha(ReelsTheme.accent(provider), 0x33), withAlpha(ReelsTheme.accent(provider), 0x14)});
+            placeholderBackground.setCornerRadius(AndroidUtilities.dp(ReelsTheme.gridRadius));
+            placeholder.setBackground(placeholderBackground);
+            placeholder.setVisibility(View.VISIBLE);
             views.setText("");
+            thumb.clearImage();
+
             if (entry.item != null && entry.item.source == ReelsItem.Source.PROFILE) {
-                if (entry.item.thumbnailUrl != null) thumb.setImage(ImageLocation.getForPath(entry.item.thumbnailUrl), "120_213", (android.graphics.drawable.Drawable) null, null);
-                else thumb.setImageDrawable(null);
+                if (!TextUtils.isEmpty(entry.item.thumbnailUrl)) {
+                    thumb.setImage(ImageLocation.getForPath(entry.item.thumbnailUrl), "160_284",
+                            (android.graphics.drawable.Drawable) null, null);
+                    placeholder.setVisibility(View.GONE);
+                }
                 if (entry.item.views > 0) views.setText(LocaleController.formatShortNumber(entry.item.views, null));
             } else if (entry.item != null && entry.item.document != null) {
-                thumb.setImage(ImageLocation.getForDocument(FileLoader.getClosestPhotoSizeWithSize(entry.item.document.thumbs, 320), entry.item.document), "120_213", null, null, entry.item.messageObject);
+                thumb.setImage(ImageLocation.getForDocument(
+                                FileLoader.getClosestPhotoSizeWithSize(entry.item.document.thumbs, 320), entry.item.document),
+                        "160_284", null, null, entry.item.messageObject);
+                placeholder.setVisibility(View.GONE);
                 if (entry.item.views > 0) views.setText(LocaleController.formatShortNumber(entry.item.views, null));
             } else {
-                thumb.setImageDrawable(null);
                 ensureResolved(entry, () -> notifyItemChanged(position));
             }
             frame.setOnClickListener(v -> ensureResolved(entry, () -> delegate.onOpen(entry.item)));
         }
+    }
+
+    private static int withAlpha(int color, int alpha) {
+        return (color & 0x00FFFFFF) | (alpha << 24);
     }
 }

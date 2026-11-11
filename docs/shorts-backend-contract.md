@@ -1,3 +1,9 @@
+> **Historical.** This document predates the Reels v2 backend contract
+> (2026-11-10). The v2 contract adds public media/cover URLs, For You and
+> Following feeds, likes, saves, shares, follows, threaded/GIF comments and
+> covers. Use the v2 contract for implementation; keep this file only as
+> background on the original upload design.
+
 # Backend work for profile-owned Reels
 
 The Android client currently has the public profile listing contract

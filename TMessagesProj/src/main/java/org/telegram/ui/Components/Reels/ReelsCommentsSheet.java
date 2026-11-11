@@ -9,12 +9,12 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
-import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
@@ -22,6 +22,7 @@ import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.LocaleController;
 import org.telegram.messenger.MessageObject;
 import org.telegram.messenger.MessagesController;
+import org.telegram.messenger.NotificationCenter;
 import org.telegram.messenger.R;
 import org.telegram.messenger.UserObject;
 import org.telegram.tgnet.TLRPC;
@@ -35,18 +36,21 @@ import org.telegram.ui.Components.RadialProgressView;
 
 import java.util.ArrayList;
 
-/** Native comments sheet: messages.getDiscussionMessage, then messages.getReplies on the discussion thread. */
-public class ReelsCommentsSheet extends BottomSheet {
+/** Native comments sheet: messages.getDiscussionMessage, then messages.getReplies on the thread. */
+public class ReelsCommentsSheet extends BottomSheet implements NotificationCenter.NotificationCenterDelegate {
 
     private final ReelsRepository repository;
     private final ReelsItem item;
+    private final Theme.ResourcesProvider provider;
     private final ArrayList<MessageObject> replies = new ArrayList<>();
     private ReelsRepository.Discussion discussion;
     private boolean loading;
     private boolean endReached;
+    private boolean closed;
     private int requestId;
 
     private final TextView titleView;
+    private final View handle;
     private final RecyclerView listView;
     private final TextView emptyView;
     private final RadialProgressView progressView;
@@ -56,27 +60,51 @@ public class ReelsCommentsSheet extends BottomSheet {
     private final RecyclerView.Adapter<RecyclerView.ViewHolder> adapter;
 
     public ReelsCommentsSheet(Context context, ReelsRepository repository, ReelsItem item) {
-        super(context, true);
+        this(context, repository, item, null);
+    }
+
+    public ReelsCommentsSheet(Context context, ReelsRepository repository, ReelsItem item,
+                              @Nullable Theme.ResourcesProvider provider) {
+        super(context, true, provider);
         this.repository = repository;
         this.item = item;
+        this.provider = provider;
         currentAccount = item.account;
         setApplyBottomPadding(false);
         setApplyTopPadding(false);
-        fixNavigationBar(getThemedColor(Theme.key_dialogBackground));
+        fixNavigationBar(ReelsTheme.sheetBackground(provider));
 
         final LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
 
+        handle = new View(context);
+        handle.setBackground(ReelsTheme.rounded(ReelsTheme.divider(provider), 2));
+        root.addView(handle, LayoutHelper.createLinear(36, 4, Gravity.CENTER_HORIZONTAL, 0, 8, 0, 2));
+
+        final LinearLayout header = new LinearLayout(context);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+
         titleView = new TextView(context);
-        titleView.setTextColor(getThemedColor(Theme.key_dialogTextBlack));
         titleView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 20);
         titleView.setTypeface(AndroidUtilities.bold());
+        titleView.setSingleLine(true);
         titleView.setGravity(Gravity.CENTER_VERTICAL);
-        titleView.setText(LocaleController.getString(R.string.ShortsComments));
-        root.addView(titleView, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 56, 20, 0, 20, 0));
+        updateTitle();
+        header.addView(titleView, LayoutHelper.createLinear(0, 52, 1f, 20, 0, 8, 0));
 
-        final FrameLayout listContainer = new FrameLayout(context);
-        root.addView(listContainer, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, (int) (AndroidUtilities.displaySize.y * 0.6f / AndroidUtilities.density)));
+        final ImageView close = new ImageView(context);
+        close.setImageResource(R.drawable.msg_close);
+        close.setColorFilter(ReelsTheme.sheetText(provider));
+        close.setContentDescription(LocaleController.getString(R.string.Close));
+        close.setPadding(dp(10), dp(10), dp(10), dp(10));
+        close.setOnClickListener(v -> dismiss());
+        header.addView(close, LayoutHelper.createLinear(44, 44, Gravity.CENTER_VERTICAL, 0, 0, 8, 0));
+        root.addView(header, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
+
+        final android.widget.FrameLayout listContainer = new android.widget.FrameLayout(context);
+        root.addView(listContainer, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT,
+                (int) (AndroidUtilities.displaySize.y * 0.62f / AndroidUtilities.density)));
 
         listView = new RecyclerView(context);
         final LinearLayoutManager layoutManager = new LinearLayoutManager(context);
@@ -93,7 +121,6 @@ public class ReelsCommentsSheet extends BottomSheet {
         listContainer.addView(listView, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
 
         emptyView = new TextView(context);
-        emptyView.setTextColor(getThemedColor(Theme.key_windowBackgroundWhiteGrayText));
         emptyView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 15);
         emptyView.setGravity(Gravity.CENTER);
         emptyView.setText(LocaleController.getString(R.string.NoComments));
@@ -102,9 +129,12 @@ public class ReelsCommentsSheet extends BottomSheet {
 
         progressView = new RadialProgressView(context);
         progressView.setSize(dp(36));
-        progressView.setProgressColor(getThemedColor(Theme.key_progressCircle));
         progressView.setVisibility(View.GONE);
         listContainer.addView(progressView, LayoutHelper.createFrame(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT, Gravity.CENTER));
+
+        final View divider = new View(context);
+        divider.setBackgroundColor(ReelsTheme.divider(provider));
+        root.addView(divider, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 1));
 
         inputRow = new LinearLayout(context);
         inputRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -113,8 +143,6 @@ public class ReelsCommentsSheet extends BottomSheet {
 
         inputField = new EditTextBoldCursor(context);
         inputField.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 16);
-        inputField.setTextColor(getThemedColor(Theme.key_dialogTextBlack));
-        inputField.setHintTextColor(getThemedColor(Theme.key_dialogTextHint));
         inputField.setHint(LocaleController.getString(R.string.LeaveAComment));
         inputField.setBackground(null);
         inputField.setMaxLines(4);
@@ -130,7 +158,6 @@ public class ReelsCommentsSheet extends BottomSheet {
 
         sendButton = new ImageView(context);
         sendButton.setImageResource(R.drawable.ic_send);
-        sendButton.setColorFilter(getThemedColor(Theme.key_dialogButton));
         sendButton.setPadding(dp(8), dp(8), dp(8), dp(8));
         sendButton.setOnClickListener(v -> sendComment());
         inputRow.addView(sendButton, LayoutHelper.createLinear(40, 40));
@@ -138,7 +165,28 @@ public class ReelsCommentsSheet extends BottomSheet {
         root.addView(inputRow, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
 
         setCustomView(root);
+        applyTheme();
+        NotificationCenter.getGlobalInstance().addObserver(this, NotificationCenter.didSetNewTheme);
         loadDiscussion();
+    }
+
+    private void applyTheme() {
+        setBackgroundColor(ReelsTheme.sheetBackground(provider));
+        fixNavigationBar(ReelsTheme.sheetBackground(provider));
+        titleView.setTextColor(ReelsTheme.sheetText(provider));
+        emptyView.setTextColor(ReelsTheme.textSecondary(provider));
+        progressView.setProgressColor(ReelsTheme.progress(provider));
+        inputField.setTextColor(ReelsTheme.sheetText(provider));
+        inputField.setHintTextColor(ReelsTheme.sheetHint(provider));
+        sendButton.setColorFilter(ReelsTheme.sheetAccent(provider));
+        if (handle != null) {
+            handle.setBackground(ReelsTheme.rounded(ReelsTheme.divider(provider), 2));
+        }
+    }
+
+    private void updateTitle() {
+        final String label = LocaleController.getString(R.string.ShortsComments);
+        titleView.setText(item != null && item.comments > 0 ? label + " (" + item.comments + ")" : label);
     }
 
     private void loadDiscussion() {
@@ -174,6 +222,7 @@ public class ReelsCommentsSheet extends BottomSheet {
             replies.addAll(newReplies);
             endReached = isEnd;
             adapter.notifyDataSetChanged();
+            updateTitle();
             updateState();
         });
     }
@@ -192,8 +241,25 @@ public class ReelsCommentsSheet extends BottomSheet {
         repository.sendComment(discussion, text, error -> {
             if (error == null) {
                 item.comments++;
+                updateTitle();
             }
         });
+    }
+
+    @Override
+    public void didReceivedNotification(int id, int account, Object... args) {
+        if (id == NotificationCenter.didSetNewTheme) {
+            applyTheme();
+            adapter.notifyDataSetChanged();
+        }
+    }
+
+    @Override
+    public void dismiss() {
+        if (closed) return;
+        closed = true;
+        NotificationCenter.getGlobalInstance().removeObserver(this, NotificationCenter.didSetNewTheme);
+        super.dismiss();
     }
 
     private final class Adapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
@@ -214,12 +280,10 @@ public class ReelsCommentsSheet extends BottomSheet {
             final TextView author = new TextView(parent.getContext());
             author.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 14);
             author.setTypeface(AndroidUtilities.bold());
-            author.setTextColor(getThemedColor(Theme.key_dialogTextBlack));
             textCol.addView(author);
 
             final TextView message = new TextView(parent.getContext());
             message.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 15);
-            message.setTextColor(getThemedColor(Theme.key_dialogTextBlack));
             textCol.addView(message, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 2, 0, 0));
 
             cell.addView(textCol, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
@@ -233,6 +297,9 @@ public class ReelsCommentsSheet extends BottomSheet {
             final LinearLayout textCol = (LinearLayout) cell.getChildAt(1);
             final TextView author = (TextView) textCol.getChildAt(0);
             final TextView message = (TextView) textCol.getChildAt(1);
+
+            author.setTextColor(ReelsTheme.sheetText(provider));
+            message.setTextColor(ReelsTheme.sheetText(provider));
 
             final MessageObject msg = replies.get(position);
             message.setText(msg.messageText);

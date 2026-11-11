@@ -1,6 +1,7 @@
 package org.telegram.ui.Components.Reels;
 
 import android.content.Context;
+import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.PorterDuff;
 import android.graphics.PorterDuffColorFilter;
@@ -28,28 +29,25 @@ import org.telegram.messenger.MessagesController;
 import org.telegram.messenger.NotificationCenter;
 import org.telegram.messenger.R;
 import org.telegram.tgnet.TLRPC;
-import org.telegram.ui.ActionBar.ActionBar;
 import org.telegram.ui.ActionBar.BaseFragment;
-import org.telegram.ui.ActionBar.Theme;
 import org.telegram.ui.ChatActivity;
 import org.telegram.ui.Components.BulletinFactory;
 import org.telegram.ui.Components.LayoutHelper;
 import org.telegram.ui.Components.RadialProgressView;
 import org.telegram.ui.Components.ShareAlert;
 import org.telegram.ui.MainTabsActivity;
-import org.telegram.ui.ProfileActivity;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
-import java.util.List;
 
 /**
- * Fullscreen horizontal snap Reels feed.
- * Paging is horizontal (Right-to-Left advances, Left-to-Right goes back).
- * Vertical gestures open comments (swipe up) or dismiss (swipe down).
+ * Fullscreen vertical Reels feed: swipe up for the next clip, swipe down for the previous one.
+ * Chrome follows Telegram's media viewer (black stage, white controls) and shares the app theme
+ * through {@link ReelsTheme}; the rest of the app keeps its normal theme colours.
  */
-public class ReelsViewer extends BaseFragment implements NotificationCenter.NotificationCenterDelegate, ReelsPageView.Delegate, ReelsViewPager.Listener, MainTabsActivity.TabFragmentDelegate {
+public class ReelsViewer extends BaseFragment implements NotificationCenter.NotificationCenterDelegate,
+        ReelsPageView.Delegate, ReelsViewPager.Listener, MainTabsActivity.TabFragmentDelegate {
 
     private final ReelsItem startItem;
     private ReelsRepository repository;
@@ -62,9 +60,12 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
     private TextView emptyView;
     private RadialProgressView progressView;
     private ImageView backButton;
+    private ImageView muteButton;
     private ImageView moreButton;
+    private TextView titleView;
     private int currentPage = RecyclerView.NO_POSITION;
     private boolean paused = true;
+    private boolean muted;
     private Runnable hideEndMessage;
     private Runnable homeAction;
     private Runnable exitAction;
@@ -98,6 +99,7 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
         getNotificationCenter().addObserver(this, NotificationCenter.didUpdateReactions);
         getNotificationCenter().addObserver(this, NotificationCenter.messagesDeleted);
         getNotificationCenter().addObserver(this, NotificationCenter.appDidLogout);
+        NotificationCenter.getGlobalInstance().addObserver(this, NotificationCenter.didSetNewTheme);
         return true;
     }
 
@@ -107,6 +109,7 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
         getNotificationCenter().removeObserver(this, NotificationCenter.didUpdateReactions);
         getNotificationCenter().removeObserver(this, NotificationCenter.messagesDeleted);
         getNotificationCenter().removeObserver(this, NotificationCenter.appDidLogout);
+        NotificationCenter.getGlobalInstance().removeObserver(this, NotificationCenter.didSetNewTheme);
         if (repository != null) {
             repository.cancel();
         }
@@ -121,7 +124,7 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
         hasOwnBackground = true;
 
         final FrameLayout root = new FrameLayout(context);
-        root.setBackgroundColor(Color.BLACK);
+        root.setBackgroundColor(ReelsTheme.viewerBackground);
 
         pager = new ReelsViewPager(context);
         pager.setListener(this);
@@ -130,36 +133,88 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
 
         progressView = new RadialProgressView(context);
         progressView.setSize(AndroidUtilities.dp(40));
-        progressView.setProgressColor(Color.WHITE);
+        progressView.setProgressColor(ReelsTheme.viewerPrimary);
         root.addView(progressView, LayoutHelper.createFrame(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT, Gravity.CENTER));
 
         emptyView = new TextView(context);
-        emptyView.setTextColor(Color.WHITE);
+        emptyView.setTextColor(ReelsTheme.viewerSecondary);
         emptyView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 16);
         emptyView.setGravity(Gravity.CENTER);
         emptyView.setVisibility(View.GONE);
-        emptyView.setText(LocaleController.getString(R.string.ShortsEmpty));
         root.addView(emptyView, LayoutHelper.createFrame(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT, Gravity.CENTER, 32, 0, 32, 0));
+
+        final int topOffset = AndroidUtilities.statusBarHeight + AndroidUtilities.dp(4);
 
         backButton = new ImageView(context);
         backButton.setImageResource(R.drawable.ic_ab_back);
-        backButton.setColorFilter(new PorterDuffColorFilter(Color.WHITE, PorterDuff.Mode.SRC_IN));
+        backButton.setColorFilter(new PorterDuffColorFilter(ReelsTheme.viewerPrimary, PorterDuff.Mode.SRC_IN));
         backButton.setContentDescription(LocaleController.getString(R.string.Back));
         backButton.setPadding(AndroidUtilities.dp(12), AndroidUtilities.dp(12), AndroidUtilities.dp(12), AndroidUtilities.dp(12));
         backButton.setOnClickListener(v -> handleBackNavigation());
-        root.addView(backButton, LayoutHelper.createFrame(48, 48, Gravity.TOP | Gravity.LEFT, 4, 32, 0, 0));
+        root.addView(backButton, LayoutHelper.createFrame(ReelsTheme.touchTarget, ReelsTheme.touchTarget,
+                Gravity.TOP | Gravity.LEFT, 4, topOffset, 0, 0));
+
+        titleView = new TextView(context);
+        titleView.setText(LocaleController.getString(R.string.ShortsTitle));
+        titleView.setTextColor(ReelsTheme.viewerPrimary);
+        titleView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 18);
+        titleView.setTypeface(AndroidUtilities.bold());
+        titleView.setGravity(Gravity.CENTER);
+        titleView.setShadowLayer(AndroidUtilities.dp(3), 0, AndroidUtilities.dp(1), ReelsTheme.viewerShadow);
+        titleView.setSingleLine(true);
+        root.addView(titleView, LayoutHelper.createFrame(LayoutHelper.WRAP_CONTENT, ReelsTheme.touchTarget,
+                Gravity.TOP | Gravity.CENTER_HORIZONTAL, 0, topOffset, 0, 0));
+
+        muteButton = new ImageView(context);
+        muteButton.setPadding(AndroidUtilities.dp(12), AndroidUtilities.dp(12), AndroidUtilities.dp(12), AndroidUtilities.dp(12));
+        muteButton.setOnClickListener(v -> toggleMute());
+        root.addView(muteButton, LayoutHelper.createFrame(ReelsTheme.touchTarget, ReelsTheme.touchTarget,
+                Gravity.TOP | Gravity.RIGHT, 0, topOffset, 52, 0));
 
         moreButton = new ImageView(context);
         moreButton.setImageResource(R.drawable.ic_ab_other);
-        moreButton.setColorFilter(new PorterDuffColorFilter(Color.WHITE, PorterDuff.Mode.SRC_IN));
+        moreButton.setColorFilter(new PorterDuffColorFilter(ReelsTheme.viewerPrimary, PorterDuff.Mode.SRC_IN));
         moreButton.setContentDescription(LocaleController.getString(R.string.AccDescrMoreOptions));
         moreButton.setPadding(AndroidUtilities.dp(12), AndroidUtilities.dp(12), AndroidUtilities.dp(12), AndroidUtilities.dp(12));
         moreButton.setOnClickListener(this::showMoreMenu);
-        root.addView(moreButton, LayoutHelper.createFrame(48, 48, Gravity.TOP | Gravity.RIGHT, 0, 32, 4, 0));
+        root.addView(moreButton, LayoutHelper.createFrame(ReelsTheme.touchTarget, ReelsTheme.touchTarget,
+                Gravity.TOP | Gravity.RIGHT, 0, topOffset, 4, 0));
 
         fragmentView = root;
+        updateChromeColors();
         initFeed();
         return fragmentView;
+    }
+
+    private void updateChromeColors() {
+        if (backButton != null) {
+            backButton.setColorFilter(new PorterDuffColorFilter(ReelsTheme.viewerPrimary, PorterDuff.Mode.SRC_IN));
+        }
+        if (titleView != null) {
+            titleView.setTextColor(ReelsTheme.viewerPrimary);
+        }
+        if (moreButton != null) {
+            moreButton.setColorFilter(new PorterDuffColorFilter(ReelsTheme.viewerPrimary, PorterDuff.Mode.SRC_IN));
+        }
+        if (muteButton != null) {
+            muteButton.setImageResource(muted ? R.drawable.msg_unmute : R.drawable.msg_mute);
+            muteButton.setColorFilter(new PorterDuffColorFilter(ReelsTheme.viewerPrimary, PorterDuff.Mode.SRC_IN));
+            muteButton.setContentDescription(LocaleController.getString(muted ? R.string.Unmute : R.string.Mute));
+        }
+        if (emptyView != null) {
+            emptyView.setTextColor(ReelsTheme.viewerSecondary);
+        }
+        if (progressView != null) {
+            progressView.setProgressColor(ReelsTheme.viewerPrimary);
+        }
+    }
+
+    private void toggleMute() {
+        muted = !muted;
+        if (playerPool != null) {
+            playerPool.setMuted(muted);
+        }
+        updateChromeColors();
     }
 
     private void handleBackNavigation() {
@@ -279,20 +334,6 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
         }
     }
 
-    @Override
-    public void onVerticalSwipeUp() {
-        // Swipe UP opens comments
-        if (currentPage >= 0 && currentPage < items.size()) {
-            openComments(items.get(currentPage));
-        }
-    }
-
-    @Override
-    public void onVerticalSwipeDown() {
-        // Swipe DOWN dismisses viewer / returns
-        handleBackNavigation();
-    }
-
     private void updateControlsForPage(int position) {
         backButton.setVisibility(View.VISIBLE);
         moreButton.setVisibility(View.VISIBLE);
@@ -303,6 +344,7 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
             return;
         }
         playerPool.setCurrent(currentPage);
+        playerPool.setMuted(muted);
         final int childCount = pager.getChildCount();
         for (int i = 0; i < childCount; i++) {
             final View child = pager.getChildAt(i);
@@ -360,9 +402,18 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
         menu.show();
     }
 
+    private String shareUrl(ReelsItem item) {
+        if (item == null) return null;
+        if (!TextUtils.isEmpty(item.publicShareUrl)) return item.publicShareUrl;
+        if (item.source == ReelsItem.Source.PROFILE && !TextUtils.isEmpty(item.reelId)) {
+            return ReelsBackendApi.absoluteUrl(currentAccount, "/r/" + item.reelId);
+        }
+        return null;
+    }
+
     private void copyLink(ReelsItem item) {
         if (item.source == ReelsItem.Source.PROFILE) {
-            String url = item.publicShareUrl != null ? item.publicShareUrl : ReelsBackendApi.absoluteUrl(currentAccount, "/api/reels/" + item.reelId);
+            final String url = shareUrl(item);
             if (url != null) {
                 AndroidUtilities.addToClipboard(url);
                 BulletinFactory.of(this).createCopyBulletin(LocaleController.getString(R.string.LinkCopied)).show();
@@ -375,6 +426,21 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
                 BulletinFactory.of(this).createCopyBulletin(LocaleController.getString(R.string.LinkCopied)).show();
             }
         });
+    }
+
+    private void shareProfileItem(ReelsItem item) {
+        final String url = shareUrl(item);
+        if (url == null || getParentActivity() == null) {
+            return;
+        }
+        final Intent intent = new Intent(Intent.ACTION_SEND);
+        intent.setType("text/plain");
+        intent.putExtra(Intent.EXTRA_TEXT, url);
+        try {
+            getParentActivity().startActivity(Intent.createChooser(intent, LocaleController.getString(R.string.ShareFile)));
+        } catch (Exception ignore) {
+            copyLink(item);
+        }
     }
 
     @Override
@@ -395,10 +461,11 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
     }
 
     private void openComments(ReelsItem item) {
+        if (getParentActivity() == null) return;
         if (item.source == ReelsItem.Source.PROFILE) {
-            new ReelsProfileCommentsSheet(getParentActivity(), item).show();
+            new ReelsProfileCommentsSheet(getParentActivity(), item, resourceProvider).show();
         } else {
-            new ReelsCommentsSheet(getParentActivity(), repository, item).show();
+            new ReelsCommentsSheet(getParentActivity(), repository, item, resourceProvider).show();
         }
     }
 
@@ -409,7 +476,7 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
         if (item.source == ReelsItem.Source.CHANNEL && item.messageObject != null) {
             showDialog(new ShareAlert(getParentActivity(), new ArrayList<>(Collections.singletonList(item.messageObject)), null, false, null, false));
         } else {
-            copyLink(item);
+            shareProfileItem(item);
         }
     }
 
@@ -418,7 +485,7 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
         final ReelsItem item = page != null ? page.getItem() : (currentPage >= 0 && currentPage < items.size() ? items.get(currentPage) : null);
         if (item == null) return;
         if (item.source == ReelsItem.Source.CHANNEL) {
-            Bundle args = new Bundle();
+            final Bundle args = new Bundle();
             args.putLong("chat_id", item.channelId);
             presentFragment(new ChatActivity(args));
         } else if (!TextUtils.isEmpty(item.creatorUsername)) {
@@ -429,7 +496,7 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
     @Override
     public void onTogglePlay(ReelsPageView page) {
         if (playerPool == null || currentPage < 0) return;
-        ExoPlayer player = playerPool.get(currentPage);
+        final ExoPlayer player = playerPool.get(currentPage);
         if (player == null) return;
         if (player.isPlaying()) {
             player.pause();
@@ -442,7 +509,7 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
     @Override
     public void onSeek(ReelsPageView page, long positionMs) {
         if (playerPool == null || currentPage < 0) return;
-        ExoPlayer player = playerPool.get(currentPage);
+        final ExoPlayer player = playerPool.get(currentPage);
         if (player != null) {
             player.seekTo(positionMs);
         }
@@ -454,6 +521,11 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
             ReelsCache.clearAccount(account);
             if (account == currentAccount) {
                 finishFragment();
+            }
+        } else if (id == NotificationCenter.didSetNewTheme) {
+            updateChromeColors();
+            if (adapter != null) {
+                adapter.notifyDataSetChanged();
             }
         }
     }
@@ -491,14 +563,14 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
         @NonNull
         @Override
         public RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
-            ReelsPageView cell = new ReelsPageView(parent.getContext(), ReelsViewer.this);
+            final ReelsPageView cell = new ReelsPageView(parent.getContext(), ReelsViewer.this);
             cell.setLayoutParams(new RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
             return new RecyclerView.ViewHolder(cell) {};
         }
 
         @Override
         public void onBindViewHolder(@NonNull RecyclerView.ViewHolder holder, int position) {
-            ReelsPageView cell = (ReelsPageView) holder.itemView;
+            final ReelsPageView cell = (ReelsPageView) holder.itemView;
             cell.bind(items.get(position), position);
         }
 
@@ -515,10 +587,11 @@ public class ReelsViewer extends BaseFragment implements NotificationCenter.Noti
         @Override
         public void onViewDetachedFromWindow(@NonNull RecyclerView.ViewHolder holder) {
             if (holder.itemView instanceof ReelsPageView) {
-                ((ReelsPageView) holder.itemView).detachPlayer();
-            }
-            if (playerPool != null) {
-                playerPool.detach(((ReelsPageView) holder.itemView).getVideoView());
+                final ReelsPageView pageView = (ReelsPageView) holder.itemView;
+                pageView.detachPlayer();
+                if (playerPool != null) {
+                    playerPool.detach(pageView.getVideoView());
+                }
             }
         }
     }
